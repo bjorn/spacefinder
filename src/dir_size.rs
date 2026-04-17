@@ -314,6 +314,115 @@ mod tests {
         let _ = std::fs::remove_dir_all(&root);
     }
 
+    /// Regression guard for the UI-responsiveness fix: the walker emits a
+    /// callback for every directory in the subtree, but the controller wraps
+    /// that callback in a visibility-scope filter so only direct children of
+    /// the currently-viewed dir ever make it through. This test builds a
+    /// multi-level tree, runs the walker with a filter matching only the
+    /// top-level children, and asserts that the filter fired for those
+    /// direct children and nothing deeper.
+    ///
+    /// Layout (identical to `make_fixture`):
+    ///   root/
+    ///     a.bin (file, never filtered in: not a dir)
+    ///     sub/            <- direct child, filtered in
+    ///       b.bin
+    ///       inner/        <- grandchild, MUST be filtered out
+    ///         c.bin
+    #[test]
+    fn scope_filter_only_fires_for_direct_children() {
+        let (root, _) = make_fixture();
+        let canon_root = std::fs::canonicalize(&root).unwrap();
+        let engine = SizeEngine::new();
+
+        // Build the "visible" set: direct-child dirs of `root`. The walker
+        // will settle and emit for every directory, including the root
+        // itself, `sub`, and `sub/inner`. Only `sub` is a direct child, so
+        // only that path should pass the filter.
+        let mut visible: FxHashMap<PathBuf, ()> = FxHashMap::default();
+        for e in std::fs::read_dir(&canon_root).unwrap() {
+            let e = e.unwrap();
+            if e.file_type().map(|t| t.is_dir()).unwrap_or(false) {
+                visible.insert(e.path(), ());
+                if let Ok(c) = std::fs::canonicalize(e.path()) {
+                    visible.insert(c, ());
+                }
+            }
+        }
+
+        // Counters: how many raw callbacks did the walker emit, and how
+        // many survived the scope filter.
+        let raw = Arc::new(AtomicU64::new(0));
+        let filtered_hits: Arc<Mutex<Vec<PathBuf>>> = Arc::new(Mutex::new(Vec::new()));
+        let root_done = Arc::new(Mutex::new(false));
+        let cv = Arc::new(std::sync::Condvar::new());
+
+        let raw_cb = raw.clone();
+        let filtered_cb = filtered_hits.clone();
+        let root_done_cb = root_done.clone();
+        let cv_cb = cv.clone();
+        let target = canon_root.clone();
+        let visible_for_cb = visible.clone();
+
+        engine.compute(
+            root.clone(),
+            1,
+            Box::new(move |p, _s| {
+                raw_cb.fetch_add(1, Ordering::Relaxed);
+                if visible_for_cb.contains_key(p) {
+                    filtered_cb.lock().unwrap().push(p.to_path_buf());
+                }
+                // Use the root completion to synchronize the test.
+                if p == target {
+                    *root_done_cb.lock().unwrap() = true;
+                    cv_cb.notify_all();
+                }
+            }),
+        );
+        let mut g = root_done.lock().unwrap();
+        while !*g {
+            g = cv.wait(g).unwrap();
+        }
+
+        // Walker should see every directory in the tree: root, sub, and
+        // sub/inner (at minimum).
+        assert!(
+            raw.load(Ordering::Relaxed) >= 3,
+            "walker should emit for every dir; saw {}",
+            raw.load(Ordering::Relaxed)
+        );
+
+        // But the scope filter should only admit direct children of `root`,
+        // i.e. `sub`. Neither `root` itself nor `sub/inner` are direct
+        // children of the currently-viewed dir in this setup.
+        let hits = filtered_hits.lock().unwrap();
+        assert_eq!(
+            hits.len(),
+            1,
+            "scope filter should admit exactly one direct child, got {:?}",
+            *hits
+        );
+        let sub_path = canon_root.join("sub");
+        let sub_alt = root.join("sub");
+        assert!(
+            hits.iter().any(|h| h == &sub_path || h == &sub_alt),
+            "the one admitted hit should be `sub`; got {:?}",
+            *hits
+        );
+
+        // And crucially: the grandchild `sub/inner` must never have been
+        // admitted, even though the walker settled it.
+        let inner_path = canon_root.join("sub").join("inner");
+        let inner_alt = root.join("sub").join("inner");
+        assert!(
+            !hits.iter().any(|h| h == &inner_path || h == &inner_alt),
+            "scope filter leaked a grandchild into the admitted set: {:?}",
+            *hits
+        );
+
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
     /// `cargo test --release -- --nocapture --ignored bench_home_cold_then_warm`
     /// to measure wall-clock time of the engine against `$HOME`.
     #[test]

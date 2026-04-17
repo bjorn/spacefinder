@@ -8,7 +8,8 @@ use slint::{ComponentHandle, Global, Model, ModelRc, SharedString, VecModel};
 use std::cell::RefCell;
 use std::path::{Path, PathBuf};
 use std::rc::{Rc, Weak};
-use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::{Arc, Mutex};
 
 thread_local! {
     /// Handle to the running `App`, set in [`App::new`]. Background size
@@ -129,10 +130,52 @@ impl App {
     /// Queue a recursive-size computation for every directory in the current
     /// listing. Cache hits complete synchronously inside `SizeEngine::compute`;
     /// misses spawn onto the shared size thread pool.
+    ///
+    /// To keep the UI responsive while walking huge trees (HOME has ~630k
+    /// subdirs), callbacks are filtered and batched before reaching the
+    /// event loop:
+    ///
+    /// 1. **Scope filter.** The walker emits progress for every subdirectory
+    ///    it settles, warming the shared cache. Only paths that are direct
+    ///    children of the currently-viewed dir can actually move a visible
+    ///    row, so non-matches are dropped on the worker thread.
+    /// 2. **Coalescing.** Matches are pushed into a shared `Vec` under a
+    ///    mutex. The first push since the last drain posts a single
+    ///    `invoke_from_event_loop`; further pushes just append. When the
+    ///    callback fires on the main thread it drains the buffer in one go
+    ///    and applies all pending `set_row_data` updates.
+    ///
+    /// Together these turn a `~631k` event-loop dispatch storm into a small
+    /// handful per second.
     fn spawn_size_jobs(&self) {
         let generation = self.generation;
         let ui = self.ui.clone();
         let engine = self.size_engine.clone();
+
+        // Build the set of paths that could actually update a visible row.
+        // Non-matching progress events (deep descendants, unrelated subtrees)
+        // are dropped on the worker thread before ever reaching the event
+        // loop. The shared cache in `dir_size` is still populated for every
+        // subdir regardless.
+        let mut visible: FxHashSet<PathBuf> = FxHashSet::default();
+        for entry in &self.entries {
+            if entry.is_dir {
+                visible.insert(entry.path.clone());
+                // Include the canonicalized form as well so worker-side
+                // comparison works even when the walker reports via the
+                // resolved symlink path.
+                if let Ok(canon) = std::fs::canonicalize(&entry.path) {
+                    visible.insert(canon);
+                }
+            }
+        }
+        let visible = Arc::new(visible);
+
+        // Shared, batched update buffer. `has_pending` gates the posting of
+        // exactly one event-loop dispatch per drain cycle.
+        let pending: Arc<Mutex<Vec<(PathBuf, SizeState)>>> =
+            Arc::new(Mutex::new(Vec::new()));
+        let has_pending = Arc::new(AtomicBool::new(false));
 
         for entry in &self.entries {
             if !entry.is_dir {
@@ -140,35 +183,89 @@ impl App {
             }
             let dir = entry.path.clone();
             let ui_for_cb = ui.clone();
+            let visible = visible.clone();
+            let pending = pending.clone();
+            let has_pending = has_pending.clone();
             let on_progress: crate::dir_size::ProgressFn =
                 Box::new(move |path: &Path, state: SizeState| {
-                    let path = path.to_path_buf();
-                    let _ = ui_for_cb.upgrade_in_event_loop(move |_ui| {
-                        // Pull the App out of thread-local storage. It lives
-                        // on the UI thread and outlives the event loop, so
-                        // this is safe.
-                        APP_TLS.with(|slot| {
-                            let Some(weak) = slot.borrow().clone() else { return };
-                            let Some(app) = weak.upgrade() else { return };
-                            if let Ok(mut app) = app.try_borrow_mut() {
-                                app.on_size_update(generation, &path, state);
-                            } else {
-                                log::trace!("size update skipped: app already borrowed");
-                            }
+                    // Scope filter: only paths directly visible in the
+                    // current listing can affect a row. Everything else goes
+                    // straight to the shared cache and is dropped here.
+                    if !visible.contains(path) {
+                        return;
+                    }
+                    // Append to the batch buffer. If we are the first
+                    // producer since the last drain, post a single dispatch.
+                    {
+                        let mut buf = match pending.lock() {
+                            Ok(g) => g,
+                            Err(poisoned) => poisoned.into_inner(),
+                        };
+                        buf.push((path.to_path_buf(), state));
+                    }
+                    if has_pending
+                        .compare_exchange(
+                            false,
+                            true,
+                            Ordering::AcqRel,
+                            Ordering::Acquire,
+                        )
+                        .is_ok()
+                    {
+                        let pending_cb = pending.clone();
+                        let has_pending_cb = has_pending.clone();
+                        let _ = ui_for_cb.upgrade_in_event_loop(move |_ui| {
+                            // Flip the gate before draining so any new
+                            // worker-side pushes that race in will post a
+                            // fresh dispatch for the next frame.
+                            has_pending_cb.store(false, Ordering::Release);
+                            let drained: Vec<(PathBuf, SizeState)> = {
+                                let mut buf = match pending_cb.lock() {
+                                    Ok(g) => g,
+                                    Err(poisoned) => poisoned.into_inner(),
+                                };
+                                std::mem::take(&mut *buf)
+                            };
+                            APP_TLS.with(|slot| {
+                                let Some(weak) = slot.borrow().clone() else {
+                                    return;
+                                };
+                                let Some(app) = weak.upgrade() else {
+                                    return;
+                                };
+                                if let Ok(mut app) = app.try_borrow_mut() {
+                                    app.apply_size_updates(generation, drained);
+                                } else {
+                                    log::trace!(
+                                        "size update skipped: app already borrowed"
+                                    );
+                                }
+                            });
                         });
-                    });
+                    }
                 });
             engine.compute(dir, generation, on_progress);
         }
     }
 
-    /// Apply a single size-state update from a background worker. Dropped
-    /// silently if the generation does not match (the user has navigated
-    /// away) or if the path is no longer in the current listing.
-    fn on_size_update(&mut self, generation: u64, path: &Path, state: SizeState) {
+    /// Apply a batched set of size-state updates from a background worker.
+    /// Dropped silently (as a group) if the generation does not match (the
+    /// user has navigated away). Individual entries that are no longer in
+    /// the current listing are ignored.
+    fn apply_size_updates(
+        &mut self,
+        generation: u64,
+        updates: Vec<(PathBuf, SizeState)>,
+    ) {
         if generation != self.generation {
             return;
         }
+        for (path, state) in updates {
+            self.on_size_update_inner(&path, state);
+        }
+    }
+
+    fn on_size_update_inner(&mut self, path: &Path, state: SizeState) {
         // Match by path. Descendants reported by the walker (warming the
         // cache for eventual navigation) won't match, and that's fine.
         let Some(eidx) = self.entries.iter().position(|e| e.path == path) else {
