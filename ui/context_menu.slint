@@ -1,0 +1,69 @@
+import { Theme } from "theme.slint";
+
+export struct MenuEntry {
+    label: string,
+    action: string,
+    shortcut: string,
+    separator: bool,
+    enabled: bool,
+}
+
+component MenuItem inherits Rectangle {
+    in property <MenuEntry> entry;
+    callback clicked();
+
+    height: entry.separator ? 9px : 28px;
+    border-radius: 4px;
+    background: entry.separator ? transparent
+        : !entry.enabled ? transparent
+        : touch.has-hover ? Theme.bg-hover : transparent;
+
+    if entry.separator : Rectangle {
+        y: 4px; height: 1px;
+        background: Theme.divider;
+    }
+    if !entry.separator : HorizontalLayout {
+        padding-left: 12px; padding-right: 12px; spacing: 12px;
+        Text {
+            text: entry.label;
+            color: entry.enabled ? Theme.text : Theme.text-subtle;
+            vertical-alignment: center;
+            font-size: 13px;
+            horizontal-stretch: 1;
+        }
+        Text {
+            text: entry.shortcut;
+            color: Theme.text-muted;
+            vertical-alignment: center;
+            font-size: 12px;
+        }
+    }
+    touch := TouchArea {
+        enabled: !entry.separator && entry.enabled;
+        mouse-cursor: pointer;
+        clicked => { root.clicked(); }
+    }
+}
+
+export component ContextMenu inherits Rectangle {
+    in property <[MenuEntry]> entries;
+    callback chosen(string);
+
+    background: Theme.bg-elevated;
+    border-color: Theme.border-strong;
+    border-width: 1px;
+    border-radius: Theme.radius;
+    drop-shadow-color: #00000088;
+    drop-shadow-blur: 14px;
+    drop-shadow-offset-y: 4px;
+    width: 240px;
+
+    VerticalLayout {
+        padding: 4px;
+        spacing: 1px;
+        for entry[i] in root.entries : MenuItem {
+            entry: entry;
+            clicked => { root.chosen(entry.action); }
+        }
+    }
+}

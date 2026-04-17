@@ -1,0 +1,169 @@
+import { LineEdit } from "std-widgets.slint";
+import { Theme } from "theme.slint";
+import { TextButton } from "icon_button.slint";
+
+export component ModalBackdrop inherits Rectangle {
+    background: #00000060;
+}
+
+component DialogFrame inherits Rectangle {
+    in property <string> title-text;
+    in property <length> body-width: 360px;
+    background: Theme.bg-elevated;
+    border-radius: 12px;
+    border-color: Theme.border-strong;
+    border-width: 1px;
+    drop-shadow-color: #00000099;
+    drop-shadow-blur: 28px;
+    drop-shadow-offset-y: 8px;
+    width: body-width;
+    height: layout.preferred-height;
+
+    layout := VerticalLayout {
+        padding: 20px;
+        spacing: 12px;
+        Text {
+            text: root.title-text;
+            color: Theme.text;
+            font-size: 17px;
+            font-weight: 700;
+        }
+        @children
+    }
+}
+
+export component RenameDialog inherits Rectangle {
+    in-out property <string> initial-name;
+    callback accepted(string);
+    callback cancelled();
+
+    visible: false;
+    in-out property <bool> shown: false;
+
+    states [
+        visible when root.shown : {
+            visible: true;
+        }
+    ]
+
+    // Fullscreen backdrop captures clicks behind the frame.
+    ModalBackdrop {
+        TouchArea { clicked => { root.cancelled(); root.shown = false; } }
+    }
+
+    frame := DialogFrame {
+        title-text: "Rename";
+        VerticalLayout {
+            spacing: 10px;
+            Text {
+                text: "Enter a new name:";
+                color: Theme.text-muted;
+                font-size: 13px;
+            }
+            edit := LineEdit {
+                text: root.initial-name;
+                accepted(t) => { root.accepted(t); root.shown = false; }
+            }
+            HorizontalLayout {
+                spacing: 10px;
+                alignment: end;
+                padding-top: 10px;
+                TextButton {
+                    text: "Cancel";
+                    clicked => { root.cancelled(); root.shown = false; }
+                }
+                TextButton {
+                    text: "Rename";
+                    primary: true;
+                    clicked => { root.accepted(edit.text); root.shown = false; }
+                }
+            }
+        }
+    }
+}
+
+export component NewFolderDialog inherits Rectangle {
+    callback accepted(string);
+    callback cancelled();
+
+    in-out property <bool> shown: false;
+    visible: root.shown;
+
+    ModalBackdrop {
+        TouchArea { clicked => { root.cancelled(); root.shown = false; } }
+    }
+
+    frame := DialogFrame {
+        title-text: "New folder";
+        VerticalLayout {
+            spacing: 10px;
+            Text {
+                text: "Folder name:";
+                color: Theme.text-muted;
+                font-size: 13px;
+            }
+            edit := LineEdit {
+                text: "New folder";
+                accepted(t) => { root.accepted(t); root.shown = false; }
+            }
+            HorizontalLayout {
+                spacing: 10px;
+                alignment: end;
+                padding-top: 10px;
+                TextButton {
+                    text: "Cancel";
+                    clicked => { root.cancelled(); root.shown = false; }
+                }
+                TextButton {
+                    text: "Create";
+                    primary: true;
+                    clicked => { root.accepted(edit.text); root.shown = false; }
+                }
+            }
+        }
+    }
+}
+
+export component ConfirmDialog inherits Rectangle {
+    in property <string> title-text;
+    in property <string> body-text;
+    in property <string> confirm-label: "Confirm";
+    in property <bool> danger: false;
+    callback accepted();
+    callback cancelled();
+
+    in-out property <bool> shown: false;
+    visible: root.shown;
+
+    ModalBackdrop {
+        TouchArea { clicked => { root.cancelled(); root.shown = false; } }
+    }
+
+    DialogFrame {
+        title-text: root.title-text;
+        VerticalLayout {
+            spacing: 10px;
+            Text {
+                text: root.body-text;
+                color: Theme.text-muted;
+                wrap: word-wrap;
+                font-size: 13px;
+            }
+            HorizontalLayout {
+                spacing: 10px;
+                alignment: end;
+                padding-top: 10px;
+                TextButton {
+                    text: "Cancel";
+                    clicked => { root.cancelled(); root.shown = false; }
+                }
+                TextButton {
+                    text: root.confirm-label;
+                    primary: !root.danger;
+                    danger: root.danger;
+                    clicked => { root.accepted(); root.shown = false; }
+                }
+            }
+        }
+    }
+}

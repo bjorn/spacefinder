@@ -1,0 +1,161 @@
+import { LineEdit } from "std-widgets.slint";
+import { Theme } from "theme.slint";
+import { IconButton } from "icon_button.slint";
+
+export struct Crumb {
+    label: string,
+    path: string,
+}
+
+component Breadcrumbs inherits Rectangle {
+    in property <[Crumb]> crumbs;
+    in property <string> current-path;
+    callback crumb-clicked(string);
+    callback edit-requested();
+
+    background: Theme.bg-component;
+    border-radius: Theme.radius-small;
+    horizontal-stretch: 1;
+    height: 32px;
+
+    HorizontalLayout {
+        padding-left: 8px;
+        padding-right: 8px;
+        spacing: 0px;
+        alignment: start;
+        for crumb[i] in root.crumbs : HorizontalLayout {
+            spacing: 2px;
+            alignment: center;
+            if i > 0 : Text {
+                text: "›";
+                color: Theme.text-muted;
+                vertical-alignment: center;
+                horizontal-alignment: center;
+                width: 14px;
+            }
+            Rectangle {
+                horizontal-stretch: 0;
+                border-radius: 3px;
+                background: t.has-hover ? Theme.bg-hover : transparent;
+                HorizontalLayout {
+                    padding-left: 6px;
+                    padding-right: 6px;
+                    alignment: center;
+                    Text {
+                        text: crumb.label;
+                        color: i == root.crumbs.length - 1 ? Theme.text : Theme.text-muted;
+                        vertical-alignment: center;
+                        font-size: 13px;
+                        font-weight: i == root.crumbs.length - 1 ? 600 : 400;
+                    }
+                }
+                t := TouchArea {
+                    mouse-cursor: pointer;
+                    clicked => { root.crumb-clicked(crumb.path); }
+                }
+            }
+        }
+        Rectangle { horizontal-stretch: 1; }
+    }
+
+    // Double-click anywhere on the bar switches to edit mode.
+    TouchArea {
+        double-clicked => { root.edit-requested(); }
+    }
+}
+
+export component HeaderBar inherits Rectangle {
+    in property <bool> can-back;
+    in property <bool> can-forward;
+    in property <bool> can-up;
+    in property <[Crumb]> crumbs;
+    in property <string> current-path;
+    in-out property <bool> path-edit-mode: false;
+    in property <string> search-text;
+    in property <int> view-mode;  // 0 = list, 1 = grid
+
+    callback back-clicked();
+    callback forward-clicked();
+    callback up-clicked();
+    callback crumb-clicked(string);
+    callback path-submitted(string);
+    callback search-changed(string);
+    callback view-mode-changed(int);
+    callback menu-clicked();
+    callback new-tab-clicked();
+
+    height: Theme.header-height;
+    background: Theme.bg-component;
+
+    Rectangle {
+        y: parent.height - 1px;
+        height: 1px;
+        background: Theme.divider;
+    }
+
+    HorizontalLayout {
+        padding: 6px;
+        spacing: 4px;
+        alignment: stretch;
+
+        IconButton {
+            icon: @image-url("icons/go-previous.svg");
+            enabled: root.can-back;
+            clicked => { root.back-clicked(); }
+        }
+        IconButton {
+            icon: @image-url("icons/go-next.svg");
+            enabled: root.can-forward;
+            clicked => { root.forward-clicked(); }
+        }
+        IconButton {
+            icon: @image-url("icons/go-up.svg");
+            enabled: root.can-up;
+            clicked => { root.up-clicked(); }
+        }
+        Rectangle { width: 4px; }
+
+        // Path bar (breadcrumbs) or edit mode LineEdit.
+        if !root.path-edit-mode : Breadcrumbs {
+            crumbs: root.crumbs;
+            current-path: root.current-path;
+            crumb-clicked(p) => { root.crumb-clicked(p); }
+            edit-requested => { root.path-edit-mode = true; }
+        }
+        if root.path-edit-mode : edit := LineEdit {
+            text: root.current-path;
+            horizontal-stretch: 1;
+            placeholder-text: "/path/to/somewhere";
+            accepted(text) => {
+                root.path-edit-mode = false;
+                root.path-submitted(text);
+            }
+            edited(text) => {}
+        }
+
+        Rectangle { width: 4px; }
+        search := LineEdit {
+            text: root.search-text;
+            placeholder-text: "Type to search…";
+            width: 200px;
+            edited(text) => { root.search-changed(text); }
+        }
+
+        Rectangle { width: 4px; }
+        IconButton {
+            icon: @image-url("icons/view-list.svg");
+            toggled: root.view-mode == 0;
+            clicked => { root.view-mode-changed(0); }
+        }
+        IconButton {
+            icon: @image-url("icons/view-grid.svg");
+            toggled: root.view-mode == 1;
+            clicked => { root.view-mode-changed(1); }
+        }
+        Rectangle { width: 4px; }
+        IconButton {
+            icon: @image-url("icons/menu.svg");
+            clicked => { root.menu-clicked(); }
+        }
+    }
+}

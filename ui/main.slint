@@ -1,0 +1,229 @@
+import { Theme } from "theme.slint";
+import { HeaderBar, Crumb } from "header_bar.slint";
+import { Sidebar, SidebarItem } from "sidebar.slint";
+import { FileListView, FileItem, FileListState } from "file_list.slint";
+import { FileGridView, GridRow, GridCell } from "file_grid.slint";
+import { ContextMenu, MenuEntry } from "context_menu.slint";
+import { RenameDialog, NewFolderDialog, ConfirmDialog } from "dialogs.slint";
+
+export { FileListState }
+
+export component MainWindow inherits Window {
+    title: "Space";
+    preferred-width: 1120px;
+    preferred-height: 720px;
+    min-width: 560px;
+    min-height: 320px;
+    background: Theme.bg;
+    default-font-size: 13px;
+    default-font-family: "Noto Sans";
+
+    // === Inputs from Rust ===
+    in property <[SidebarItem]> sidebar-items;
+    in property <string> sidebar-active-path;
+    in property <[Crumb]> crumbs;
+    in property <string> current-path;
+    in property <bool> can-back;
+    in property <bool> can-forward;
+    in property <bool> can-up;
+    in property <[FileItem]> items;
+    in property <[GridRow]> tile-rows;
+    in-out property <int> view-mode: 0;  // 0=list 1=grid
+    in property <int> sort-col: 0;
+    in property <bool> sort-asc: true;
+    in property <string> status-text;
+
+    // Context menu state
+    in property <[MenuEntry]> context-entries;
+    in-out property <bool> context-visible: false;
+    in-out property <length> context-x;
+    in-out property <length> context-y;
+
+    // Dialog state
+    in-out property <bool> rename-shown: false;
+    in-out property <string> rename-initial: "";
+    in-out property <bool> new-folder-shown: false;
+    in-out property <bool> confirm-shown: false;
+    in property <string> confirm-title;
+    in property <string> confirm-body;
+    in property <string> confirm-label: "Confirm";
+    in property <bool> confirm-danger: false;
+
+    // === Outputs to Rust ===
+    callback back-clicked();
+    callback forward-clicked();
+    callback up-clicked();
+    callback crumb-clicked(string);
+    callback path-submitted(string);
+    callback search-changed(string);
+    callback view-mode-changed(int);
+    callback menu-clicked();
+
+    callback sidebar-clicked(string);
+    callback item-clicked(int, bool, bool);
+    callback item-double-clicked(int);
+    callback item-right-clicked(int, length, length);
+    callback background-right-clicked(length, length);
+    callback background-clicked();
+    callback sort-changed(int);
+    callback rename-submitted(int, string);
+    callback rename-cancelled();
+    callback context-action(string);
+
+    callback new-folder-accepted(string);
+    callback rename-dialog-accepted(string);
+    callback confirm-accepted();
+
+    callback key-pressed(string) -> bool;
+
+    forward-focus: focus-scope;
+    focus-scope := FocusScope {
+        key-pressed(e) => {
+            // Close context menu on Escape
+            if (root.context-visible && e.text == Key.Escape) {
+                root.context-visible = false;
+                return accept;
+            }
+            if (root.key-pressed(e.text)) {
+                return accept;
+            }
+            reject
+        }
+    }
+
+    VerticalLayout {
+        HeaderBar {
+            can-back: root.can-back;
+            can-forward: root.can-forward;
+            can-up: root.can-up;
+            crumbs: root.crumbs;
+            current-path: root.current-path;
+            view-mode: root.view-mode;
+            back-clicked => { root.back-clicked(); }
+            forward-clicked => { root.forward-clicked(); }
+            up-clicked => { root.up-clicked(); }
+            crumb-clicked(p) => { root.crumb-clicked(p); }
+            path-submitted(p) => { root.path-submitted(p); }
+            search-changed(s) => { root.search-changed(s); }
+            view-mode-changed(v) => {
+                root.view-mode = v;
+                root.view-mode-changed(v);
+            }
+            menu-clicked => { root.menu-clicked(); }
+        }
+        HorizontalLayout {
+            Sidebar {
+                items: root.sidebar-items;
+                active-path: root.sidebar-active-path;
+                entry-clicked(p) => { root.sidebar-clicked(p); }
+            }
+            Rectangle {
+                width: 1px;
+                background: Theme.divider;
+            }
+            Rectangle {
+                horizontal-stretch: 1;
+                content := VerticalLayout {
+                    if root.view-mode == 0 : FileListView {
+                        items: root.items;
+                        sort-col: root.sort-col;
+                        sort-asc: root.sort-asc;
+                        item-clicked(i, c, s) => { root.item-clicked(i, c, s); }
+                        item-double-clicked(i) => { root.item-double-clicked(i); }
+                        item-right-clicked(i, x, y) => {
+                            root.item-right-clicked(i, x + parent.absolute-position.x, y + parent.absolute-position.y);
+                        }
+                        background-right-clicked(x, y) => {
+                            root.background-right-clicked(x + parent.absolute-position.x, y + parent.absolute-position.y);
+                        }
+                        background-clicked => { root.background-clicked(); }
+                        sort-changed(c) => { root.sort-changed(c); }
+                        rename-submitted(i, n) => { root.rename-submitted(i, n); }
+                        rename-cancelled => { root.rename-cancelled(); }
+                    }
+                    if root.view-mode == 1 : FileGridView {
+                        items: root.items;
+                        tile-rows: root.tile-rows;
+                        item-clicked(i, c, s) => { root.item-clicked(i, c, s); }
+                        item-double-clicked(i) => { root.item-double-clicked(i); }
+                        item-right-clicked(i, x, y) => {
+                            root.item-right-clicked(i, x + parent.absolute-position.x, y + parent.absolute-position.y);
+                        }
+                        background-right-clicked(x, y) => {
+                            root.background-right-clicked(x + parent.absolute-position.x, y + parent.absolute-position.y);
+                        }
+                        background-clicked => { root.background-clicked(); }
+                        rename-submitted(i, n) => { root.rename-submitted(i, n); }
+                        rename-cancelled => { root.rename-cancelled(); }
+                    }
+
+                    // Status bar
+                    Rectangle {
+                        height: 22px;
+                        background: Theme.bg-component;
+                        HorizontalLayout {
+                            padding-left: 12px; padding-right: 12px;
+                            Text {
+                                text: root.status-text;
+                                color: Theme.text-muted;
+                                font-size: 12px;
+                                vertical-alignment: center;
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    // Context menu overlay.
+    if root.context-visible : Rectangle {
+        // Click-outside catcher
+        TouchArea {
+            clicked => { root.context-visible = false; }
+        }
+        ContextMenu {
+            x: min(root.context-x, root.width - self.width - 4px);
+            y: min(root.context-y, root.height - self.height - 4px);
+            entries: root.context-entries;
+            chosen(a) => {
+                root.context-visible = false;
+                root.context-action(a);
+            }
+        }
+    }
+
+    // Dialogs overlay.
+    rename-dialog := RenameDialog {
+        shown: root.rename-shown;
+        initial-name: root.rename-initial;
+        width: root.width; height: root.height;
+        accepted(name) => {
+            root.rename-shown = false;
+            root.rename-dialog-accepted(name);
+        }
+        cancelled => { root.rename-shown = false; }
+    }
+    new-folder-dialog := NewFolderDialog {
+        shown: root.new-folder-shown;
+        width: root.width; height: root.height;
+        accepted(name) => {
+            root.new-folder-shown = false;
+            root.new-folder-accepted(name);
+        }
+        cancelled => { root.new-folder-shown = false; }
+    }
+    confirm-dialog := ConfirmDialog {
+        shown: root.confirm-shown;
+        title-text: root.confirm-title;
+        body-text: root.confirm-body;
+        confirm-label: root.confirm-label;
+        danger: root.confirm-danger;
+        width: root.width; height: root.height;
+        accepted => {
+            root.confirm-shown = false;
+            root.confirm-accepted();
+        }
+        cancelled => { root.confirm-shown = false; }
+    }
+}

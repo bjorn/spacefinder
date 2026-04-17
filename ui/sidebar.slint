@@ -1,0 +1,88 @@
+import { Theme } from "theme.slint";
+
+export struct SidebarItem {
+    label: string,
+    icon: image,
+    path: string,
+    is-separator: bool,
+    is-header: bool,
+}
+
+component SidebarRow inherits Rectangle {
+    in property <SidebarItem> entry;
+    in property <bool> active: false;
+    callback clicked();
+
+    height: entry.is-separator ? 10px : (entry.is-header ? 32px : 30px);
+    border-radius: Theme.radius-small;
+    background: entry.is-separator || entry.is-header ? transparent
+        : root.active ? Theme.selection-bg
+        : touch.has-hover ? Theme.bg-hover
+        : transparent;
+
+    if !entry.is-separator && !entry.is-header : HorizontalLayout {
+        padding-left: 10px;
+        padding-right: 10px;
+        spacing: 10px;
+        alignment: start;
+        VerticalLayout {
+            alignment: center;
+            Image {
+                source: entry.icon;
+                width: 16px;
+                height: 16px;
+                colorize: Theme.text;
+            }
+        }
+        Text {
+            text: entry.label;
+            color: Theme.text;
+            vertical-alignment: center;
+            font-size: 13px;
+            horizontal-stretch: 1;
+        }
+    }
+
+    if entry.is-header : HorizontalLayout {
+        padding-left: 10px;
+        padding-top: 8px;
+        Text {
+            text: entry.label;
+            color: Theme.text-subtle;
+            font-size: 11px;
+            font-weight: 600;
+        }
+    }
+
+    if entry.is-separator : Rectangle {
+        y: 4px;
+        height: 1px;
+        background: Theme.divider;
+    }
+
+    touch := TouchArea {
+        enabled: !entry.is-separator && !entry.is-header;
+        mouse-cursor: pointer;
+        clicked => { root.clicked(); }
+    }
+}
+
+export component Sidebar inherits Rectangle {
+    in property <[SidebarItem]> items;
+    in property <string> active-path;
+    callback entry-clicked(string);
+
+    background: Theme.bg;
+    width: Theme.sidebar-width;
+
+    VerticalLayout {
+        padding: 6px;
+        spacing: 2px;
+        for item[i] in root.items : SidebarRow {
+            entry: item;
+            active: !item.is-separator && !item.is-header && item.path == root.active-path;
+            clicked => { root.entry-clicked(item.path); }
+        }
+        Rectangle { vertical-stretch: 1; }
+    }
+}

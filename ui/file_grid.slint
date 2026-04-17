@@ -1,0 +1,138 @@
+import { ScrollView, ListView, LineEdit } from "std-widgets.slint";
+import { Theme } from "theme.slint";
+import { FileItem, FileListState } from "file_list.slint";
+
+export struct GridCell { index: int }
+export struct GridRow { tiles: [GridCell] }
+
+component GridTile inherits Rectangle {
+    in property <FileItem> item;
+    in property <int> index;
+    in property <bool> editing: false;
+    callback clicked(int, bool, bool);
+    callback double-clicked(int);
+    callback right-clicked(int, length, length);
+    callback rename-submitted(int, string);
+    callback rename-cancelled();
+
+    width: 104px;
+    height: 120px;
+    border-radius: Theme.radius-small;
+    background: root.item.selected
+        ? Theme.selection-bg
+        : touch.has-hover ? Theme.bg-hover : transparent;
+
+    VerticalLayout {
+        padding: 6px;
+        spacing: 4px;
+        alignment: start;
+        VerticalLayout {
+            alignment: center;
+            height: 64px;
+            Rectangle {
+                HorizontalLayout {
+                    alignment: center;
+                    Image {
+                        source: root.item.icon;
+                        width: 56px;
+                        height: 56px;
+                        image-fit: contain;
+                    }
+                }
+            }
+        }
+        if !root.editing : Text {
+            text: root.item.name;
+            color: root.item.cut ? Theme.text-subtle : Theme.text;
+            horizontal-alignment: center;
+            overflow: elide;
+            wrap: word-wrap;
+            font-size: 12px;
+        }
+        if root.editing : LineEdit {
+            height: 24px;
+            text: FileListState.editing-text;
+            accepted(t) => {
+                root.rename-submitted(root.index, t);
+            }
+        }
+    }
+
+    touch := TouchArea {
+        mouse-cursor: pointer;
+        enabled: !root.editing;
+        property <bool> ctrl-held: false;
+        property <bool> shift-held: false;
+        pointer-event(ev) => {
+            self.ctrl-held = ev.modifiers.control;
+            self.shift-held = ev.modifiers.shift;
+            if (ev.button == PointerEventButton.right && ev.kind == PointerEventKind.down) {
+                root.right-clicked(root.index, self.mouse-x + root.x, self.mouse-y + root.y);
+            }
+        }
+        clicked => {
+            root.clicked(root.index, self.ctrl-held, self.shift-held);
+        }
+        double-clicked => { root.double-clicked(root.index); }
+    }
+}
+
+export component FileGridView inherits Rectangle {
+    in property <[FileItem]> items;
+    callback item-clicked(int, bool, bool);
+    callback item-double-clicked(int);
+    callback item-right-clicked(int, length, length);
+    callback background-right-clicked(length, length);
+    callback background-clicked();
+    callback rename-submitted(int, string);
+    callback rename-cancelled();
+
+    property <length> tile-size: 110px;
+    property <int> cols: max(1, floor((self.width - 16px) / root.tile-size));
+
+    background: Theme.bg;
+
+    // Background touch catcher (right-click to open the empty-area menu).
+    TouchArea {
+        pointer-event(ev) => {
+            if (ev.kind == PointerEventKind.down && ev.button == PointerEventButton.right) {
+                root.background-right-clicked(self.mouse-x, self.mouse-y);
+            }
+        }
+        clicked => { root.background-clicked(); }
+    }
+
+    ListView {
+        for row[r] in root.tile-rows : Rectangle {
+            height: 120px;
+            HorizontalLayout {
+                padding: 4px;
+                spacing: 4px;
+                alignment: start;
+                for tile[c] in row.tiles : GridTile {
+                    item: root.items[tile.index];
+                    index: tile.index;
+                    editing: FileListState.editing-index == tile.index;
+                    clicked(idx, ctrl, shift) => {
+                        root.item-clicked(idx, ctrl, shift);
+                    }
+                    double-clicked(idx) => { root.item-double-clicked(idx); }
+                    right-clicked(idx, x, y) => {
+                        root.item-right-clicked(idx, x, y);
+                    }
+                    rename-submitted(idx, name) => {
+                        FileListState.editing-index = -1;
+                        root.rename-submitted(idx, name);
+                    }
+                    rename-cancelled => {
+                        FileListState.editing-index = -1;
+                        root.rename-cancelled();
+                    }
+                }
+            }
+        }
+    }
+
+    // Pre-computed row model (set from Rust: list of {tiles: [{index}]}).
+    in property <[GridRow]> tile-rows;
+}

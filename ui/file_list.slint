@@ -1,0 +1,250 @@
+import { ScrollView, ListView, LineEdit } from "std-widgets.slint";
+import { Theme } from "theme.slint";
+
+export struct FileItem {
+    name: string,
+    icon: image,
+    is-dir: bool,
+    size-text: string,
+    modified-text: string,
+    selected: bool,
+    cut: bool,
+    hidden: bool,
+}
+
+export global FileListState {
+    in-out property <int> editing-index: -1;
+    in-out property <string> editing-text: "";
+}
+
+component ListHeader inherits Rectangle {
+    in property <int> sort-col;
+    in property <bool> sort-asc;
+    in property <bool> show-size;
+    callback sort-changed(int);
+
+    height: 28px;
+    background: Theme.bg-component;
+    Rectangle {
+        y: parent.height - 1px;
+        height: 1px;
+        background: Theme.divider;
+    }
+    HorizontalLayout {
+        padding-left: 44px; padding-right: 16px; spacing: 8px;
+        Rectangle {
+            horizontal-stretch: 3;
+            HorizontalLayout {
+                padding-left: 4px;
+                alignment: start;
+                spacing: 4px;
+                Text {
+                    text: "Name";
+                    color: Theme.text-muted;
+                    font-size: 12px;
+                    font-weight: 600;
+                    vertical-alignment: center;
+                }
+                if root.sort-col == 0 : Text {
+                    text: root.sort-asc ? "▲" : "▼";
+                    color: Theme.text-muted;
+                    font-size: 9px;
+                    vertical-alignment: center;
+                }
+            }
+            TouchArea { clicked => { root.sort-changed(0); } }
+        }
+        Rectangle {
+            horizontal-stretch: 1;
+            HorizontalLayout {
+                alignment: start;
+                spacing: 4px;
+                Text {
+                    text: "Modified";
+                    color: Theme.text-muted;
+                    font-size: 12px;
+                    font-weight: 600;
+                    vertical-alignment: center;
+                }
+                if root.sort-col == 1 : Text {
+                    text: root.sort-asc ? "▲" : "▼";
+                    color: Theme.text-muted;
+                    font-size: 9px;
+                    vertical-alignment: center;
+                }
+            }
+            TouchArea { clicked => { root.sort-changed(1); } }
+        }
+        if root.show-size : Rectangle {
+            horizontal-stretch: 1;
+            HorizontalLayout {
+                alignment: end;
+                spacing: 4px;
+                if root.sort-col == 2 : Text {
+                    text: root.sort-asc ? "▲" : "▼";
+                    color: Theme.text-muted;
+                    font-size: 9px;
+                    vertical-alignment: center;
+                }
+                Text {
+                    text: "Size";
+                    color: Theme.text-muted;
+                    font-size: 12px;
+                    font-weight: 600;
+                    vertical-alignment: center;
+                }
+            }
+            TouchArea { clicked => { root.sort-changed(2); } }
+        }
+    }
+}
+
+component ListRow inherits Rectangle {
+    in property <FileItem> item;
+    in property <int> index;
+    in property <bool> editing: false;
+    callback clicked(int, bool, bool);  // idx, ctrl, shift
+    callback double-clicked(int);
+    callback right-clicked(int, length, length);
+    callback rename-submitted(int, string);
+    callback rename-cancelled();
+
+    height: 32px;
+    background: root.item.selected
+        ? Theme.selection-bg
+        : touch.has-hover ? Theme.bg-hover : transparent;
+
+    HorizontalLayout {
+        padding-left: 12px; padding-right: 16px; spacing: 8px;
+        VerticalLayout {
+            alignment: center;
+            Image {
+                source: root.item.icon;
+                width: 20px;
+                height: 20px;
+                image-fit: contain;
+            }
+        }
+        Rectangle {
+            horizontal-stretch: 3;
+            if !root.editing : Text {
+                x: 4px;
+                text: root.item.name;
+                color: root.item.cut ? Theme.text-subtle : Theme.text;
+                vertical-alignment: center;
+                overflow: elide;
+                font-size: 13px;
+                font-weight: root.item.is-dir ? 500 : 400;
+            }
+            if root.editing : LineEdit {
+                height: 26px;
+                text: FileListState.editing-text;
+                accepted(t) => {
+                    root.rename-submitted(root.index, t);
+                }
+            }
+        }
+        Rectangle {
+            horizontal-stretch: 1;
+            HorizontalLayout {
+                alignment: start;
+                Text {
+                    text: root.item.modified-text;
+                    color: Theme.text-muted;
+                    vertical-alignment: center;
+                    font-size: 12px;
+                }
+            }
+        }
+        Rectangle {
+            horizontal-stretch: 1;
+            HorizontalLayout {
+                alignment: end;
+                Text {
+                    text: root.item.size-text;
+                    color: Theme.text-muted;
+                    vertical-alignment: center;
+                    font-size: 12px;
+                }
+            }
+        }
+    }
+
+    touch := TouchArea {
+        mouse-cursor: pointer;
+        enabled: !root.editing;
+        property <bool> ctrl-held: false;
+        property <bool> shift-held: false;
+        pointer-event(ev) => {
+            self.ctrl-held = ev.modifiers.control;
+            self.shift-held = ev.modifiers.shift;
+            if (ev.button == PointerEventButton.right && ev.kind == PointerEventKind.down) {
+                root.right-clicked(root.index, self.mouse-x + root.x, self.mouse-y + root.y);
+            }
+        }
+        clicked => {
+            root.clicked(root.index, self.ctrl-held, self.shift-held);
+        }
+        double-clicked => { root.double-clicked(root.index); }
+    }
+}
+
+export component FileListView inherits Rectangle {
+    in property <[FileItem]> items;
+    in property <int> sort-col;
+    in property <bool> sort-asc;
+    in property <bool> show-size: true;
+    callback item-clicked(int, bool, bool);
+    callback item-double-clicked(int);
+    callback item-right-clicked(int, length, length);
+    callback background-right-clicked(length, length);
+    callback background-clicked();
+    callback sort-changed(int);
+    callback rename-submitted(int, string);
+    callback rename-cancelled();
+
+    background: Theme.bg;
+
+    VerticalLayout {
+        ListHeader {
+            sort-col: root.sort-col;
+            sort-asc: root.sort-asc;
+            show-size: root.show-size;
+            sort-changed(c) => { root.sort-changed(c); }
+        }
+        // Stack: virtualized list above an empty-area touch catcher.
+        Rectangle {
+            // Background touch catcher (right-click to open the empty-area menu).
+            TouchArea {
+                pointer-event(ev) => {
+                    if (ev.kind == PointerEventKind.down && ev.button == PointerEventButton.right) {
+                        root.background-right-clicked(self.mouse-x, self.mouse-y);
+                    }
+                }
+                clicked => { root.background-clicked(); }
+            }
+            ListView {
+                for item[i] in root.items : ListRow {
+                    item: item;
+                    index: i;
+                    editing: FileListState.editing-index == i;
+                    clicked(idx, ctrl, shift) => {
+                        root.item-clicked(idx, ctrl, shift);
+                    }
+                    double-clicked(idx) => { root.item-double-clicked(idx); }
+                    right-clicked(idx, x, y) => {
+                        root.item-right-clicked(idx, x, y);
+                    }
+                    rename-submitted(idx, name) => {
+                        FileListState.editing-index = -1;
+                        root.rename-submitted(idx, name);
+                    }
+                    rename-cancelled => {
+                        FileListState.editing-index = -1;
+                        root.rename-cancelled();
+                    }
+                }
+            }
+        }
+    }
+}
