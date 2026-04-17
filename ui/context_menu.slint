@@ -57,8 +57,9 @@ export component ContextMenu inherits Rectangle {
     drop-shadow-blur: 14px;
     drop-shadow-offset-y: 4px;
     width: 240px;
+    height: items-layout.preferred-height;
 
-    VerticalLayout {
+    items-layout := VerticalLayout {
         padding: 4px;
         spacing: 1px;
         for entry[i] in root.entries : MenuItem {
