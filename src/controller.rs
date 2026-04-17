@@ -1,5 +1,6 @@
 use crate::dir_size::SizeEngine;
 use crate::fs_scan::{self, Entry, SizeState, SortCol};
+use crate::i18n::{tr, tr_fmt, tr_n_fmt};
 use crate::icons::Icons;
 use crate::sidebar::{self, TRASH_TAG};
 use crate::{Crumb, FileItem, FileListState, GridCell, GridRow, MainWindow, MenuEntry};
@@ -400,9 +401,9 @@ impl App {
         let total = self.filtered.len();
         let sel = self.selection.len();
         let status = if sel == 0 {
-            format!("{} items", total)
+            tr_n_fmt("{} item", "{} items", total, &[&total])
         } else {
-            format!("{} of {} selected", sel, total)
+            tr_fmt("{} of {} selected", &[&sel, &total])
         };
         ui.set_status_text(status.into());
     }
@@ -630,11 +631,18 @@ impl App {
         }
         let Some(ui) = self.ui.upgrade() else { return };
         self.pending_confirm = Some(ConfirmAction::DeleteToTrash(paths.clone()));
-        ui.set_confirm_title("Move to trash?".into());
+        let n = paths.len();
+        ui.set_confirm_title(tr("Move to trash?").into());
         ui.set_confirm_body(
-            format!("Move {} item(s) to the trash?", paths.len()).into(),
+            tr_n_fmt(
+                "Move {} item to the trash?",
+                "Move {} items to the trash?",
+                n,
+                &[&n],
+            )
+            .into(),
         );
-        ui.set_confirm_label("Move to trash".into());
+        ui.set_confirm_label(tr("Move to trash").into());
         ui.set_confirm_danger(false);
         ui.set_confirm_shown(true);
     }
@@ -646,15 +654,18 @@ impl App {
         }
         let Some(ui) = self.ui.upgrade() else { return };
         self.pending_confirm = Some(ConfirmAction::PermanentDelete(paths.clone()));
-        ui.set_confirm_title("Permanently delete?".into());
+        let n = paths.len();
+        ui.set_confirm_title(tr("Permanently delete?").into());
         ui.set_confirm_body(
-            format!(
-                "This will permanently delete {} item(s). This cannot be undone.",
-                paths.len()
+            tr_n_fmt(
+                "This will permanently delete {} item. This cannot be undone.",
+                "This will permanently delete {} items. This cannot be undone.",
+                n,
+                &[&n],
             )
             .into(),
         );
-        ui.set_confirm_label("Delete".into());
+        ui.set_confirm_label(tr("Delete").into());
         ui.set_confirm_danger(true);
         ui.set_confirm_shown(true);
     }
@@ -1048,32 +1059,32 @@ fn menu_separator() -> MenuEntry {
 fn item_menu(a: &App) -> Vec<MenuEntry> {
     let can_paste = a.clipboard_op.is_some();
     vec![
-        menu_entry("Open", "open", "Enter"),
+        menu_entry(&tr("Open"), "open", "Enter"),
         menu_separator(),
-        menu_entry("Cut", "cut", "Ctrl+X"),
-        menu_entry("Copy", "copy", "Ctrl+C"),
+        menu_entry(&tr("Cut"), "cut", "Ctrl+X"),
+        menu_entry(&tr("Copy"), "copy", "Ctrl+C"),
         MenuEntry {
-            label: "Paste".into(),
+            label: tr("Paste").into(),
             action: "paste".into(),
             shortcut: "Ctrl+V".into(),
             separator: false,
             enabled: can_paste,
         },
-        menu_entry("Copy path", "copy-path", ""),
+        menu_entry(&tr("Copy path"), "copy-path", ""),
         menu_separator(),
-        menu_entry("Rename", "rename", "F2"),
-        menu_entry("Move to trash", "trash", "Delete"),
-        menu_entry("Delete permanently", "delete", "Shift+Delete"),
+        menu_entry(&tr("Rename"), "rename", "F2"),
+        menu_entry(&tr("Move to trash"), "trash", "Delete"),
+        menu_entry(&tr("Delete permanently"), "delete", "Shift+Delete"),
     ]
 }
 
 fn empty_menu(a: &App) -> Vec<MenuEntry> {
     let can_paste = a.clipboard_op.is_some();
     vec![
-        menu_entry("New folder", "new-folder", ""),
+        menu_entry(&tr("New folder"), "new-folder", ""),
         menu_separator(),
         MenuEntry {
-            label: "Paste".into(),
+            label: tr("Paste").into(),
             action: "paste".into(),
             shortcut: "Ctrl+V".into(),
             separator: false,
@@ -1081,23 +1092,23 @@ fn empty_menu(a: &App) -> Vec<MenuEntry> {
         },
         menu_separator(),
         menu_entry(
-            if a.show_hidden { "Hide hidden files" } else { "Show hidden files" },
+            &tr(if a.show_hidden { "Hide hidden files" } else { "Show hidden files" }),
             "toggle-hidden",
             "Ctrl+H",
         ),
-        menu_entry("Refresh", "refresh", "F5"),
+        menu_entry(&tr("Refresh"), "refresh", "F5"),
     ]
 }
 
 fn main_menu(a: &App) -> Vec<MenuEntry> {
     vec![
-        menu_entry("New folder", "new-folder", "Ctrl+Shift+N"),
+        menu_entry(&tr("New folder"), "new-folder", "Ctrl+Shift+N"),
         menu_entry(
-            if a.show_hidden { "Hide hidden files" } else { "Show hidden files" },
+            &tr(if a.show_hidden { "Hide hidden files" } else { "Show hidden files" }),
             "toggle-hidden",
             "Ctrl+H",
         ),
         menu_separator(),
-        menu_entry("Refresh", "refresh", "F5"),
+        menu_entry(&tr("Refresh"), "refresh", "F5"),
     ]
 }

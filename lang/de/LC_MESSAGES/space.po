@@ -86,3 +86,161 @@ msgstr "Geändert"
 msgctxt "ListHeader"
 msgid "Size"
 msgstr "Größe"
+
+# === Rust-side strings (src/sidebar.rs, src/controller.rs) ===
+
+#: src/sidebar.rs
+msgctxt "Rust"
+msgid "Places"
+msgstr "Orte"
+
+#: src/sidebar.rs
+msgctxt "Rust"
+msgid "Drives"
+msgstr "Laufwerke"
+
+#: src/sidebar.rs
+msgctxt "Rust"
+msgid "Home"
+msgstr "Persönlicher Ordner"
+
+#: src/sidebar.rs
+msgctxt "Rust"
+msgid "Desktop"
+msgstr "Schreibtisch"
+
+#: src/sidebar.rs
+msgctxt "Rust"
+msgid "Documents"
+msgstr "Dokumente"
+
+#: src/sidebar.rs
+msgctxt "Rust"
+msgid "Downloads"
+msgstr "Downloads"
+
+#: src/sidebar.rs
+msgctxt "Rust"
+msgid "Music"
+msgstr "Musik"
+
+#: src/sidebar.rs
+msgctxt "Rust"
+msgid "Pictures"
+msgstr "Bilder"
+
+#: src/sidebar.rs
+msgctxt "Rust"
+msgid "Videos"
+msgstr "Videos"
+
+#: src/sidebar.rs
+msgctxt "Rust"
+msgid "Trash"
+msgstr "Papierkorb"
+
+#: src/sidebar.rs
+msgctxt "Rust"
+msgid "Root"
+msgstr "Wurzelverzeichnis"
+
+#: src/controller.rs
+msgctxt "Rust"
+msgid "Open"
+msgstr "Öffnen"
+
+#: src/controller.rs
+msgctxt "Rust"
+msgid "Cut"
+msgstr "Ausschneiden"
+
+#: src/controller.rs
+msgctxt "Rust"
+msgid "Copy"
+msgstr "Kopieren"
+
+#: src/controller.rs
+msgctxt "Rust"
+msgid "Paste"
+msgstr "Einfügen"
+
+#: src/controller.rs
+msgctxt "Rust"
+msgid "Copy path"
+msgstr "Pfad kopieren"
+
+#: src/controller.rs
+msgctxt "Rust"
+msgid "Rename"
+msgstr "Umbenennen"
+
+#: src/controller.rs
+msgctxt "Rust"
+msgid "Move to trash"
+msgstr "In den Papierkorb verschieben"
+
+#: src/controller.rs
+msgctxt "Rust"
+msgid "Delete permanently"
+msgstr "Endgültig löschen"
+
+#: src/controller.rs
+msgctxt "Rust"
+msgid "New folder"
+msgstr "Neuer Ordner"
+
+#: src/controller.rs
+msgctxt "Rust"
+msgid "Show hidden files"
+msgstr "Versteckte Dateien anzeigen"
+
+#: src/controller.rs
+msgctxt "Rust"
+msgid "Hide hidden files"
+msgstr "Versteckte Dateien ausblenden"
+
+#: src/controller.rs
+msgctxt "Rust"
+msgid "Refresh"
+msgstr "Aktualisieren"
+
+#: src/controller.rs
+msgctxt "Rust"
+msgid "Move to trash?"
+msgstr "In den Papierkorb verschieben?"
+
+#: src/controller.rs
+msgctxt "Rust"
+msgid "Move {} item to the trash?"
+msgid_plural "Move {} items to the trash?"
+msgstr[0] "{} Eintrag in den Papierkorb verschieben?"
+msgstr[1] "{} Einträge in den Papierkorb verschieben?"
+
+#: src/controller.rs
+msgctxt "Rust"
+msgid "Permanently delete?"
+msgstr "Endgültig löschen?"
+
+#: src/controller.rs
+msgctxt "Rust"
+msgid "This will permanently delete {} item. This cannot be undone."
+msgid_plural "This will permanently delete {} items. This cannot be undone."
+msgstr[0] "Dies löscht {} Eintrag endgültig. Nicht rückgängig machbar."
+msgstr[1] "Dies löscht {} Einträge endgültig. Nicht rückgängig machbar."
+
+#: src/controller.rs
+msgctxt "Rust"
+msgid "Delete"
+msgstr "Löschen"
+
+#: src/controller.rs
+msgctxt "Rust"
+msgid "{} item"
+msgid_plural "{} items"
+msgstr[0] "{} Eintrag"
+msgstr[1] "{} Einträge"
+
+#: src/controller.rs
+msgctxt "Rust"
+msgid "{} of {} selected"
+msgstr "{} von {} ausgewählt"
