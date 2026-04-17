@@ -52,11 +52,11 @@ export component RenameDialog inherits Rectangle {
     }
 
     frame := DialogFrame {
-        title-text: "Rename";
+        title-text: @tr("Rename");
         VerticalLayout {
             spacing: 10px;
             Text {
-                text: "Enter a new name:";
+                text: @tr("Enter a new name:");
                 color: Theme.text-muted;
                 font-size: 13px;
             }
@@ -69,11 +69,11 @@ export component RenameDialog inherits Rectangle {
                 alignment: end;
                 padding-top: 10px;
                 TextButton {
-                    text: "Cancel";
+                    text: @tr("Cancel");
                     clicked => { root.cancelled(); root.shown = false; }
                 }
                 TextButton {
-                    text: "Rename";
+                    text: @tr("Rename");
                     primary: true;
                     clicked => { root.accepted(edit.text); root.shown = false; }
                 }
@@ -94,16 +94,16 @@ export component NewFolderDialog inherits Rectangle {
     }
 
     frame := DialogFrame {
-        title-text: "New folder";
+        title-text: @tr("New folder");
         VerticalLayout {
             spacing: 10px;
             Text {
-                text: "Folder name:";
+                text: @tr("Folder name:");
                 color: Theme.text-muted;
                 font-size: 13px;
             }
             edit := LineEdit {
-                text: "New folder";
+                text: @tr("New folder");
                 accepted(t) => { root.accepted(t); root.shown = false; }
             }
             HorizontalLayout {
@@ -111,11 +111,11 @@ export component NewFolderDialog inherits Rectangle {
                 alignment: end;
                 padding-top: 10px;
                 TextButton {
-                    text: "Cancel";
+                    text: @tr("Cancel");
                     clicked => { root.cancelled(); root.shown = false; }
                 }
                 TextButton {
-                    text: "Create";
+                    text: @tr("Create");
                     primary: true;
                     clicked => { root.accepted(edit.text); root.shown = false; }
                 }
@@ -127,7 +127,7 @@ export component NewFolderDialog inherits Rectangle {
 export component ConfirmDialog inherits Rectangle {
     in property <string> title-text;
     in property <string> body-text;
-    in property <string> confirm-label: "Confirm";
+    in property <string> confirm-label: @tr("Confirm");
     in property <bool> danger: false;
     callback accepted();
     callback cancelled();
@@ -154,7 +154,7 @@ export component ConfirmDialog inherits Rectangle {
                 alignment: end;
                 padding-top: 10px;
                 TextButton {
-                    text: "Cancel";
+                    text: @tr("Cancel");
                     clicked => { root.cancelled(); root.shown = false; }
                 }
                 TextButton {

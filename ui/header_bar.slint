@@ -125,7 +125,7 @@ export component HeaderBar inherits Rectangle {
         if root.path-edit-mode : edit := LineEdit {
             text: root.current-path;
             horizontal-stretch: 1;
-            placeholder-text: "/path/to/somewhere";
+            placeholder-text: @tr("/path/to/somewhere");
             accepted(text) => {
                 root.path-edit-mode = false;
                 root.path-submitted(text);
@@ -136,7 +136,7 @@ export component HeaderBar inherits Rectangle {
         Rectangle { width: 4px; }
         search := LineEdit {
             text: root.search-text;
-            placeholder-text: "Type to search…";
+            placeholder-text: @tr("Type to search…");
             width: 200px;
             edited(text) => { root.search-changed(text); }
         }
