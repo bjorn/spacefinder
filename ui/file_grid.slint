@@ -1,4 +1,4 @@
-import { LineEdit } from "std-widgets.slint";
+import { LineEdit, ScrollView } from "std-widgets.slint";
 import { Theme } from "theme.slint";
 import { FileItem, FileListState } from "file_list.slint";
 
@@ -104,7 +104,11 @@ export component FileGridView inherits Rectangle {
         clicked => { root.background-clicked(); }
     }
 
-    Flickable {
+    ScrollView {
+        // ScrollView renders a real vertical scrollbar, unlike bare Flickable.
+        // Pin viewport-width to self.width so no horizontal scrollbar appears;
+        // the column math below reads root.width, which the ScrollView shrinks
+        // to account for the vertical scrollbar gutter, so tiles do not clip.
         viewport-width: self.width;
         viewport-height: max(self.height, root.row-count * root.tile-h + 8px);
 
