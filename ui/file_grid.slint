@@ -1,9 +1,6 @@
-import { ScrollView, ListView, LineEdit } from "std-widgets.slint";
+import { LineEdit } from "std-widgets.slint";
 import { Theme } from "theme.slint";
 import { FileItem, FileListState } from "file_list.slint";
-
-export struct GridCell { index: int }
-export struct GridRow { tiles: [GridCell] }
 
 component GridTile inherits Rectangle {
     in property <FileItem> item;
@@ -87,8 +84,13 @@ export component FileGridView inherits Rectangle {
     callback rename-submitted(int, string);
     callback rename-cancelled();
 
-    property <length> tile-size: 110px;
-    property <int> cols: max(1, floor((self.width - 16px) / root.tile-size));
+    // Reactive grid geometry. cols is derived from the view width, so the
+    // layout reflows as the window (and therefore this view) is resized.
+    property <length> tile-w: 110px;
+    property <length> tile-h: 124px;
+    property <length> h-padding: 8px;
+    property <int> cols: max(1, floor((self.width - 2 * root.h-padding) / root.tile-w));
+    property <int> row-count: (items.length + cols - 1) / cols;
 
     background: Theme.bg;
 
@@ -102,37 +104,35 @@ export component FileGridView inherits Rectangle {
         clicked => { root.background-clicked(); }
     }
 
-    ListView {
-        for row[r] in root.tile-rows : Rectangle {
-            height: 120px;
-            HorizontalLayout {
-                padding: 4px;
-                spacing: 4px;
-                alignment: start;
-                for tile[c] in row.tiles : GridTile {
-                    item: root.items[tile.index];
-                    index: tile.index;
-                    editing: FileListState.editing-index == tile.index;
-                    clicked(idx, ctrl, shift) => {
-                        root.item-clicked(idx, ctrl, shift);
-                    }
-                    double-clicked(idx) => { root.item-double-clicked(idx); }
-                    right-clicked(idx, x, y) => {
-                        root.item-right-clicked(idx, x, y);
-                    }
-                    rename-submitted(idx, name) => {
-                        FileListState.editing-index = -1;
-                        root.rename-submitted(idx, name);
-                    }
-                    rename-cancelled => {
-                        FileListState.editing-index = -1;
-                        root.rename-cancelled();
-                    }
-                }
+    Flickable {
+        viewport-width: self.width;
+        viewport-height: max(self.height, root.row-count * root.tile-h + 8px);
+
+        // All tiles are instantiated. Row-level virtualization is lost
+        // compared to the previous ListView design, but typical cleanup
+        // workloads are a few hundred to a few thousand items which handles
+        // fine. The win is live column reflow driven entirely from Slint.
+        for item[i] in root.items : GridTile {
+            x: root.h-padding + mod(i, root.cols) * root.tile-w;
+            y: 4px + floor(i / root.cols) * root.tile-h;
+            item: item;
+            index: i;
+            editing: FileListState.editing-index == i;
+            clicked(idx, ctrl, shift) => {
+                root.item-clicked(idx, ctrl, shift);
+            }
+            double-clicked(idx) => { root.item-double-clicked(idx); }
+            right-clicked(idx, x, y) => {
+                root.item-right-clicked(idx, x, y);
+            }
+            rename-submitted(idx, name) => {
+                FileListState.editing-index = -1;
+                root.rename-submitted(idx, name);
+            }
+            rename-cancelled => {
+                FileListState.editing-index = -1;
+                root.rename-cancelled();
             }
         }
     }
-
-    // Pre-computed row model (set from Rust: list of {tiles: [{index}]}).
-    in property <[GridRow]> tile-rows;
 }

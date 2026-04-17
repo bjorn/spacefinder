@@ -4,7 +4,7 @@ use crate::fs_scan::{self, Entry, SizeState, SortCol};
 use crate::i18n::{tr, tr_fmt, tr_n_fmt};
 use crate::icons::Icons;
 use crate::sidebar::{self, TRASH_TAG};
-use crate::{Crumb, FileItem, FileListState, GridCell, GridRow, MainWindow, MenuEntry};
+use crate::{Crumb, FileItem, FileListState, MainWindow, MenuEntry};
 use humansize::{format_size, BINARY};
 use rustc_hash::FxHashSet;
 use slint::{ComponentHandle, Global, Model, ModelRc, SharedString, VecModel};
@@ -495,27 +495,8 @@ impl App {
         // continue to mutate individual rows via `set_row_data`.
         self.items_model.set_vec(items);
 
-        // Precompute grid rows based on window width.
-        let tile = 110.0_f32;
-        let size = ui.window().size();
-        let scale = ui.window().scale_factor();
-        let win_w = (size.width as f32) / scale;
-        let content_w = (win_w - 224.0).max(tile);
-        let cols = ((content_w / tile).floor() as usize).max(1);
-        let mut rows: Vec<GridRow> = Vec::new();
-        let mut i = 0;
-        while i < self.filtered.len() {
-            let end = (i + cols).min(self.filtered.len());
-            let mut row_cells: Vec<GridCell> = Vec::with_capacity(end - i);
-            for idx in i..end {
-                row_cells.push(GridCell { index: idx as i32 });
-            }
-            rows.push(GridRow {
-                tiles: ModelRc::from(Rc::new(VecModel::from(row_cells))),
-            });
-            i = end;
-        }
-        ui.set_tile_rows(ModelRc::from(Rc::new(VecModel::from(rows))));
+        // Grid column count is now derived reactively in Slint from the
+        // FileGridView's own width, so no tile-rows push is needed here.
 
         // Crumbs + current path.
         ui.set_crumbs(ModelRc::from(Rc::new(VecModel::from(self.build_crumbs()))));

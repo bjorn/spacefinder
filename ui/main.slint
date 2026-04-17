@@ -2,7 +2,7 @@ import { Theme } from "theme.slint";
 import { HeaderBar, Crumb } from "header_bar.slint";
 import { Sidebar, SidebarItem } from "sidebar.slint";
 import { FileListView, FileItem, FileListState } from "file_list.slint";
-import { FileGridView, GridRow, GridCell } from "file_grid.slint";
+import { FileGridView } from "file_grid.slint";
 import { ContextMenu, MenuEntry } from "context_menu.slint";
 import { RenameDialog, NewFolderDialog, ConfirmDialog } from "dialogs.slint";
 
@@ -27,7 +27,6 @@ export component MainWindow inherits Window {
     in property <bool> can-forward;
     in property <bool> can-up;
     in property <[FileItem]> items;
-    in property <[GridRow]> tile-rows;
     in-out property <int> view-mode: 0;  // 0=list 1=grid
     in property <int> sort-col: 0;
     in property <bool> sort-asc: true;
@@ -143,7 +142,6 @@ export component MainWindow inherits Window {
                     }
                     if root.view-mode == 1 : FileGridView {
                         items: root.items;
-                        tile-rows: root.tile-rows;
                         item-clicked(i, c, s) => { root.item-clicked(i, c, s); }
                         item-double-clicked(i) => { root.item-double-clicked(i); }
                         item-right-clicked(i, x, y) => {
