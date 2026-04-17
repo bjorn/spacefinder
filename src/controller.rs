@@ -1,3 +1,4 @@
+use crate::config::{self, Config};
 use crate::dir_size::SizeEngine;
 use crate::fs_scan::{self, Entry, SizeState, SortCol};
 use crate::i18n::{tr, tr_fmt, tr_n_fmt};
@@ -6,11 +7,17 @@ use crate::sidebar::{self, TRASH_TAG};
 use crate::{Crumb, FileItem, FileListState, GridCell, GridRow, MainWindow, MenuEntry};
 use rustc_hash::FxHashSet;
 use slint::{ComponentHandle, Global, Model, ModelRc, SharedString, VecModel};
-use std::cell::RefCell;
+use std::cell::{Cell, RefCell};
 use std::path::{Path, PathBuf};
 use std::rc::{Rc, Weak};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
+use std::time::{Duration, Instant};
+
+/// Minimum spacing between consecutive writes of the config file. Additional
+/// state changes inside this window are coalesced into a single follow-up
+/// save scheduled via `slint::Timer::single_shot`.
+const PERSIST_DEBOUNCE: Duration = Duration::from_millis(500);
 
 thread_local! {
     /// Handle to the running `App`, set in [`App::new`]. Background size
@@ -54,6 +61,22 @@ pub struct App {
     generation: u64,
     /// Parallel directory-size computer.
     size_engine: Arc<SizeEngine>,
+
+    /// Current `view_mode` from the Slint side. Rust is the source of truth
+    /// for persistence: we mirror UI changes in here via `set_view_mode`.
+    /// 0 = list, 1 = grid, matching `ui/main.slint`.
+    view_mode: i32,
+    /// Last-observed window size, in logical pixels. Refreshed on every
+    /// `persist()` call so a final `on_close_requested` save catches the
+    /// latest dimensions.
+    window_size: [u32; 2],
+    /// Timestamp of the most recent `config::save` call. `None` means no
+    /// save has happened yet. Used by the debounce in `persist`.
+    last_save: Option<Instant>,
+    /// Set while a follow-up save is queued on the Slint timer. Prevents
+    /// stacking more than one pending save while the user mashes through
+    /// state changes.
+    save_scheduled: Rc<Cell<bool>>,
 }
 
 #[derive(Copy, Clone)]
@@ -68,11 +91,17 @@ enum ConfirmAction {
 }
 
 impl App {
-    pub fn new(ui: &MainWindow, start: PathBuf) -> Rc<RefCell<Self>> {
+    pub fn new(ui: &MainWindow, start: PathBuf, cfg: Config) -> Rc<RefCell<Self>> {
         let icons = Icons::new();
         let sidebar_items = sidebar::build(&icons);
         let items_model = Rc::new(VecModel::<FileItem>::default());
         ui.set_items(ModelRc::from(items_model.clone()));
+
+        // Translate the persisted sort column enum into the controller's
+        // runtime enum. Keep the two types decoupled so the on-disk format
+        // can evolve independently of `fs_scan`.
+        let sort_col = sort_col_from_config(cfg.sort_col);
+        let view_mode = view_mode_from_config(cfg.view_mode);
 
         let app = Rc::new(RefCell::new(Self {
             ui: ui.as_weak(),
@@ -86,16 +115,20 @@ impl App {
             last_clicked: None,
             cut_paths: FxHashSet::default(),
             clipboard_op: None,
-            show_hidden: false,
-            folders_first: true,
+            show_hidden: cfg.show_hidden,
+            folders_first: cfg.folders_first,
             search: String::new(),
-            sort_col: SortCol::Name,
-            sort_asc: true,
+            sort_col,
+            sort_asc: cfg.sort_asc,
             pending_confirm: None,
             pending_rename: None,
             items_model,
             generation: 0,
             size_engine: Arc::new(SizeEngine::new()),
+            view_mode,
+            window_size: cfg.window_size,
+            last_save: None,
+            save_scheduled: Rc::new(Cell::new(false)),
         }));
 
         // Stash a weak handle for background workers to reach back through.
@@ -105,8 +138,104 @@ impl App {
         ui.set_sidebar_items(ModelRc::from(sidebar_model));
 
         wire_callbacks(ui, app.clone());
-        app.borrow_mut().refresh();
+        {
+            let mut a = app.borrow_mut();
+            a.refresh();
+            // Reflect the persisted view mode into the UI after the first
+            // `push_ui_state` so the grid vs list toggle matches on the very
+            // first paint.
+            if let Some(ui) = a.ui.upgrade() {
+                ui.set_view_mode(a.view_mode);
+            }
+        }
         app
+    }
+
+    /// Build a `Config` snapshot from the current in-memory state.
+    fn snapshot_config(&self) -> Config {
+        Config {
+            view_mode: view_mode_to_config(self.view_mode),
+            sort_col: sort_col_to_config(self.sort_col),
+            sort_asc: self.sort_asc,
+            show_hidden: self.show_hidden,
+            folders_first: self.folders_first,
+            window_size: self.window_size,
+            last_location: Some(self.current.clone()),
+        }
+    }
+
+    /// Update the cached window-size from the live `Window`. Called right
+    /// before a save so the snapshot reflects whatever the compositor last
+    /// handed us.
+    fn refresh_window_size(&mut self) {
+        let Some(ui) = self.ui.upgrade() else { return };
+        let size = ui.window().size();
+        let scale = ui.window().scale_factor();
+        if scale > 0.0 {
+            let w = (size.width as f32 / scale).round() as u32;
+            let h = (size.height as f32 / scale).round() as u32;
+            if w > 0 && h > 0 {
+                self.window_size = [w, h];
+            }
+        }
+    }
+
+    /// Persist the current state to disk with debouncing. Saves happen at
+    /// most once per `PERSIST_DEBOUNCE`; while the window is closed (or
+    /// the cooldown is active), the state is captured into a single
+    /// follow-up timer rather than written immediately.
+    fn persist(&mut self) {
+        self.refresh_window_size();
+        let now = Instant::now();
+        let can_save_now = match self.last_save {
+            None => true,
+            Some(prev) => now.duration_since(prev) >= PERSIST_DEBOUNCE,
+        };
+        if can_save_now {
+            let cfg = self.snapshot_config();
+            config::save(&cfg);
+            self.last_save = Some(now);
+            return;
+        }
+        // Cooldown active: coalesce into a single scheduled save.
+        if self.save_scheduled.get() {
+            return;
+        }
+        self.save_scheduled.set(true);
+        let remaining = self
+            .last_save
+            .map(|prev| {
+                PERSIST_DEBOUNCE
+                    .checked_sub(now.duration_since(prev))
+                    .unwrap_or(Duration::from_millis(0))
+            })
+            .unwrap_or(PERSIST_DEBOUNCE);
+        let flag = self.save_scheduled.clone();
+        slint::Timer::single_shot(remaining, move || {
+            flag.set(false);
+            APP_TLS.with(|slot| {
+                let Some(weak) = slot.borrow().clone() else { return };
+                let Some(app) = weak.upgrade() else { return };
+                if let Ok(mut app) = app.try_borrow_mut() {
+                    app.refresh_window_size();
+                    let cfg = app.snapshot_config();
+                    config::save(&cfg);
+                    app.last_save = Some(Instant::now());
+                } else {
+                    log::trace!("debounced save skipped: app already borrowed");
+                }
+            });
+        });
+    }
+
+    /// Persist synchronously regardless of the debounce window. Used at
+    /// shutdown to guarantee the latest window size hits disk even when
+    /// the user resized just before closing.
+    fn persist_now(&mut self) {
+        self.refresh_window_size();
+        let cfg = self.snapshot_config();
+        config::save(&cfg);
+        self.last_save = Some(Instant::now());
     }
 
     fn refresh(&mut self) {
@@ -446,6 +575,7 @@ impl App {
         self.selection.clear();
         self.last_clicked = None;
         self.refresh();
+        self.persist();
     }
 
     fn go_back(&mut self) {
@@ -456,6 +586,7 @@ impl App {
         self.current = self.history[self.history_i].clone();
         self.selection.clear();
         self.refresh();
+        self.persist();
     }
 
     fn go_forward(&mut self) {
@@ -466,10 +597,12 @@ impl App {
         self.current = self.history[self.history_i].clone();
         self.selection.clear();
         self.refresh();
+        self.persist();
     }
 
     fn go_up(&mut self) {
         if let Some(parent) = self.current.parent() {
+            // `navigate` already calls `persist`, no need to double-save.
             self.navigate(parent.to_path_buf());
         }
     }
@@ -728,6 +861,7 @@ impl App {
         self.show_hidden = !self.show_hidden;
         self.rebuild_view();
         self.push_ui_state();
+        self.persist();
     }
 
     fn set_sort(&mut self, col: i32) {
@@ -745,13 +879,16 @@ impl App {
         }
         self.rebuild_view();
         self.push_ui_state();
+        self.persist();
     }
 
-    fn set_view_mode(&self, mode: i32) {
+    fn set_view_mode(&mut self, mode: i32) {
+        self.view_mode = mode;
         if let Some(ui) = self.ui.upgrade() {
             ui.set_view_mode(mode);
             // re-push to recompute grid rows for new mode width assumptions
         }
+        self.persist();
     }
 
     fn handle_key(&mut self, text: SharedString) -> bool {
@@ -784,6 +921,81 @@ impl App {
 
 fn lexical(a: &str, b: &str) -> std::cmp::Ordering {
     a.to_lowercase().cmp(&b.to_lowercase())
+}
+
+/// Map the on-disk `config::SortCol` into the runtime `fs_scan::SortCol`.
+fn sort_col_from_config(c: config::SortCol) -> SortCol {
+    match c {
+        config::SortCol::Name => SortCol::Name,
+        config::SortCol::Modified => SortCol::Modified,
+        config::SortCol::Size => SortCol::Size,
+    }
+}
+
+/// Map the runtime `fs_scan::SortCol` back to the on-disk `config::SortCol`.
+fn sort_col_to_config(c: SortCol) -> config::SortCol {
+    match c {
+        SortCol::Name => config::SortCol::Name,
+        SortCol::Modified => config::SortCol::Modified,
+        SortCol::Size => config::SortCol::Size,
+    }
+}
+
+/// Map the on-disk `config::ViewMode` into the UI integer (0 = list, 1 = grid).
+fn view_mode_from_config(v: config::ViewMode) -> i32 {
+    match v {
+        config::ViewMode::List => 0,
+        config::ViewMode::Grid => 1,
+    }
+}
+
+/// Map the UI integer (0 = list, anything else = grid) back to `config::ViewMode`.
+fn view_mode_to_config(m: i32) -> config::ViewMode {
+    if m == 1 {
+        config::ViewMode::Grid
+    } else {
+        config::ViewMode::List
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn sort_col_round_trip() {
+        for c in [
+            config::SortCol::Name,
+            config::SortCol::Modified,
+            config::SortCol::Size,
+        ] {
+            assert_eq!(sort_col_to_config(sort_col_from_config(c)), c);
+        }
+    }
+
+    #[test]
+    fn view_mode_round_trip() {
+        for v in [config::ViewMode::List, config::ViewMode::Grid] {
+            assert_eq!(view_mode_to_config(view_mode_from_config(v)), v);
+        }
+        // Integer side: 0 is List, 1 is Grid; anything outside that range
+        // clamps to List. We match `ui/main.slint` where `view-mode` is an
+        // int with 0 = list, 1 = grid.
+        assert_eq!(view_mode_to_config(0), config::ViewMode::List);
+        assert_eq!(view_mode_to_config(1), config::ViewMode::Grid);
+        assert_eq!(view_mode_to_config(-1), config::ViewMode::List);
+        assert_eq!(view_mode_to_config(99), config::ViewMode::List);
+    }
+
+    #[test]
+    fn config_defaults_map_to_expected_runtime_values() {
+        let cfg = Config::default();
+        assert!(matches!(sort_col_from_config(cfg.sort_col), SortCol::Name));
+        assert_eq!(view_mode_from_config(cfg.view_mode), 0);
+        assert!(cfg.sort_asc);
+        assert!(!cfg.show_hidden);
+        assert!(cfg.folders_first);
+    }
 }
 
 fn unique_name(dir: &Path, name: &str) -> PathBuf {
@@ -820,6 +1032,22 @@ fn copy_recursive(src: &Path, dst: &Path) -> std::io::Result<()> {
 }
 
 fn wire_callbacks(ui: &MainWindow, app: Rc<RefCell<App>>) {
+    {
+        // Persist on window close. Slint 1.16 does not expose a per-frame
+        // resize callback on `Window`, so we opportunistically capture the
+        // current size here. The debounced `persist()` calls from navigation
+        // and sort/view changes also call `refresh_window_size`, so mid-
+        // session resizes get flushed as a side effect of normal use; this
+        // final hook just guarantees a clean exit also writes the latest
+        // dimensions.
+        let app = app.clone();
+        ui.window().on_close_requested(move || {
+            if let Ok(mut a) = app.try_borrow_mut() {
+                a.persist_now();
+            }
+            slint::CloseRequestResponse::HideWindow
+        });
+    }
     {
         let app = app.clone();
         ui.on_back_clicked(move || {

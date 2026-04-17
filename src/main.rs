@@ -28,8 +28,29 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         log::warn!("select_bundled_translation({:?}): {}", lang, e);
     }
 
-    let start = dirs::home_dir().unwrap_or_else(|| std::path::PathBuf::from("/"));
-    let _app = controller::App::new(&window, start);
+    // Load persisted settings before creating the controller so the first
+    // paint already reflects the user's choices.
+    let cfg = config::load();
+    log::info!("config: loaded {:?}", cfg);
+
+    // Apply the persisted window size in logical pixels. Slint will map this
+    // to physical pixels using the window's scale factor.
+    let [win_w, win_h] = cfg.window_size;
+    window
+        .window()
+        .set_size(slint::LogicalSize::new(win_w as f32, win_h as f32));
+
+    // Pick the initial directory. Prefer the last-seen location if it still
+    // exists, otherwise fall back to the user's home directory, and finally
+    // the filesystem root so the app can at least launch.
+    let start = cfg
+        .last_location
+        .clone()
+        .filter(|p| p.is_dir())
+        .or_else(dirs::home_dir)
+        .unwrap_or_else(|| std::path::PathBuf::from("/"));
+
+    let _app = controller::App::new(&window, start, cfg);
     window.run()?;
     Ok(())
 }
