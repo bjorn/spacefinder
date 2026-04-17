@@ -1,5 +1,6 @@
 slint::include_modules!();
 
+mod config;
 mod controller;
 mod dir_size;
 mod fs_scan;
