@@ -1,6 +1,7 @@
 slint::include_modules!();
 
 mod controller;
+mod dir_size;
 mod fs_scan;
 mod icons;
 mod sidebar;

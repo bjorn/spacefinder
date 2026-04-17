@@ -4,21 +4,57 @@ use std::fs;
 use std::path::{Path, PathBuf};
 use std::time::SystemTime;
 
+/// State of a directory-size computation for an `Entry`.
+///
+/// Files always have `SizeState::Known(size)` with the size taken directly
+/// from the direntry metadata at scan time. Directories start out as
+/// `Calculating` and flip to `Known` (or `Unknown` on permission errors)
+/// once the async size walker finishes that subtree.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SizeState {
+    /// Size not yet computed (background walker still working on it).
+    Calculating,
+    /// Size is known in bytes.
+    Known(u64),
+    /// Could not be determined (e.g. permission denied walking the subtree).
+    Unknown,
+}
+
 #[derive(Debug, Clone)]
 pub struct Entry {
     pub name: String,
     pub path: PathBuf,
     pub is_dir: bool,
+    /// File size in bytes (from direntry metadata).
+    ///
+    /// For directories this stays at 0 and the authoritative value lives in
+    /// `size_state`. For files it equals `meta.len()`.
     pub size: u64,
+    /// For directories, this tracks the recursive size computation. For
+    /// files it is always `Known(size)`.
+    pub size_state: SizeState,
     pub modified: SystemTime,
     pub hidden: bool,
 }
 
 impl Entry {
+    /// Best-known size in bytes. For directories this is 0 until the walker
+    /// settles the subtree, then the computed total.
+    pub fn effective_size(&self) -> u64 {
+        match self.size_state {
+            SizeState::Known(n) => n,
+            _ => self.size,
+        }
+    }
+
     pub fn size_text(&self) -> String {
         if self.is_dir {
-            // Don't enumerate directory contents (slow).
-            String::new()
+            match self.size_state {
+                SizeState::Known(n) => format_size(n, BINARY),
+                // Single-char placeholders to keep the column compact.
+                SizeState::Calculating => "\u{2026}".to_string(), // "…"
+                SizeState::Unknown => "?".to_string(),
+            }
         } else {
             format_size(self.size, BINARY)
         }
@@ -41,12 +77,18 @@ pub fn scan(dir: &Path) -> std::io::Result<Vec<Entry>> {
         let Ok(meta) = entry.metadata() else { continue };
         let is_dir = meta.is_dir();
         let size = if is_dir { 0 } else { meta.len() };
+        let size_state = if is_dir {
+            SizeState::Calculating
+        } else {
+            SizeState::Known(size)
+        };
         let modified = meta.modified().unwrap_or(SystemTime::UNIX_EPOCH);
         out.push(Entry {
             name,
             path,
             is_dir,
             size,
+            size_state,
             modified,
             hidden,
         });

@@ -1,12 +1,22 @@
-use crate::fs_scan::{self, Entry, SortCol};
+use crate::dir_size::SizeEngine;
+use crate::fs_scan::{self, Entry, SizeState, SortCol};
 use crate::icons::Icons;
 use crate::sidebar::{self, TRASH_TAG};
 use crate::{Crumb, FileItem, FileListState, GridCell, GridRow, MainWindow, MenuEntry};
 use rustc_hash::FxHashSet;
-use slint::{ComponentHandle, Global, ModelRc, SharedString, VecModel};
+use slint::{ComponentHandle, Global, Model, ModelRc, SharedString, VecModel};
 use std::cell::RefCell;
 use std::path::{Path, PathBuf};
-use std::rc::Rc;
+use std::rc::{Rc, Weak};
+use std::sync::Arc;
+
+thread_local! {
+    /// Handle to the running `App`, set in [`App::new`]. Background size
+    /// workers post results through `slint::Weak::upgrade_in_event_loop`,
+    /// and the closure on the UI thread fishes the app out of here rather
+    /// than capturing an `Rc` (which is not `Send`).
+    static APP_TLS: RefCell<Option<Weak<RefCell<App>>>> = const { RefCell::new(None) };
+}
 
 pub struct App {
     ui: slint::Weak<MainWindow>,
@@ -31,6 +41,17 @@ pub struct App {
 
     pending_confirm: Option<ConfirmAction>,
     pending_rename: Option<PathBuf>, // path being renamed via dialog
+
+    /// Shared model driving the list/grid views. Background size workers
+    /// mutate individual rows on this model via `set_row_data` rather than
+    /// replacing the whole thing, so the UI preserves scroll and selection
+    /// while sizes stream in.
+    items_model: Rc<VecModel<FileItem>>,
+    /// Bumped on every navigation / refresh. Stale size results carrying
+    /// an older generation are dropped by [`App::on_size_update`].
+    generation: u64,
+    /// Parallel directory-size computer.
+    size_engine: Arc<SizeEngine>,
 }
 
 #[derive(Copy, Clone)]
@@ -48,6 +69,8 @@ impl App {
     pub fn new(ui: &MainWindow, start: PathBuf) -> Rc<RefCell<Self>> {
         let icons = Icons::new();
         let sidebar_items = sidebar::build(&icons);
+        let items_model = Rc::new(VecModel::<FileItem>::default());
+        ui.set_items(ModelRc::from(items_model.clone()));
 
         let app = Rc::new(RefCell::new(Self {
             ui: ui.as_weak(),
@@ -68,7 +91,13 @@ impl App {
             sort_asc: true,
             pending_confirm: None,
             pending_rename: None,
+            items_model,
+            generation: 0,
+            size_engine: Arc::new(SizeEngine::new()),
         }));
+
+        // Stash a weak handle for background workers to reach back through.
+        APP_TLS.with(|slot| *slot.borrow_mut() = Some(Rc::downgrade(&app)));
 
         let sidebar_model = Rc::new(VecModel::from(sidebar_items));
         ui.set_sidebar_items(ModelRc::from(sidebar_model));
@@ -79,6 +108,10 @@ impl App {
     }
 
     fn refresh(&mut self) {
+        // Bump before kicking off any async work so in-flight callbacks from
+        // a previous scan get dropped.
+        self.generation = self.generation.wrapping_add(1);
+
         self.entries = fs_scan::scan(&self.current).unwrap_or_else(|e| {
             log::warn!("scan failed for {}: {}", self.current.display(), e);
             Vec::new()
@@ -90,6 +123,71 @@ impl App {
         );
         self.rebuild_view();
         self.push_ui_state();
+        self.spawn_size_jobs();
+    }
+
+    /// Queue a recursive-size computation for every directory in the current
+    /// listing. Cache hits complete synchronously inside `SizeEngine::compute`;
+    /// misses spawn onto the shared size thread pool.
+    fn spawn_size_jobs(&self) {
+        let generation = self.generation;
+        let ui = self.ui.clone();
+        let engine = self.size_engine.clone();
+
+        for entry in &self.entries {
+            if !entry.is_dir {
+                continue;
+            }
+            let dir = entry.path.clone();
+            let ui_for_cb = ui.clone();
+            let on_progress: crate::dir_size::ProgressFn =
+                Box::new(move |path: &Path, state: SizeState| {
+                    let path = path.to_path_buf();
+                    let _ = ui_for_cb.upgrade_in_event_loop(move |_ui| {
+                        // Pull the App out of thread-local storage. It lives
+                        // on the UI thread and outlives the event loop, so
+                        // this is safe.
+                        APP_TLS.with(|slot| {
+                            let Some(weak) = slot.borrow().clone() else { return };
+                            let Some(app) = weak.upgrade() else { return };
+                            if let Ok(mut app) = app.try_borrow_mut() {
+                                app.on_size_update(generation, &path, state);
+                            } else {
+                                log::trace!("size update skipped: app already borrowed");
+                            }
+                        });
+                    });
+                });
+            engine.compute(dir, generation, on_progress);
+        }
+    }
+
+    /// Apply a single size-state update from a background worker. Dropped
+    /// silently if the generation does not match (the user has navigated
+    /// away) or if the path is no longer in the current listing.
+    fn on_size_update(&mut self, generation: u64, path: &Path, state: SizeState) {
+        if generation != self.generation {
+            return;
+        }
+        // Match by path. Descendants reported by the walker (warming the
+        // cache for eventual navigation) won't match, and that's fine.
+        let Some(eidx) = self.entries.iter().position(|e| e.path == path) else {
+            return;
+        };
+        let entry = &mut self.entries[eidx];
+        if !entry.is_dir {
+            return;
+        }
+        entry.size_state = state;
+
+        // Update the corresponding row in the live model, if visible.
+        let Some(display_idx) = self.filtered.iter().position(|&i| i == eidx) else {
+            return;
+        };
+        if let Some(mut item) = self.items_model.row_data(display_idx) {
+            item.size_text = entry.size_text().into();
+            self.items_model.set_row_data(display_idx, item);
+        }
     }
 
     fn rebuild_view(&mut self) {
@@ -125,7 +223,7 @@ impl App {
             let ord = match sort_col {
                 SortCol::Name => lexical(&ea.name, &eb.name),
                 SortCol::Modified => ea.modified.cmp(&eb.modified),
-                SortCol::Size => ea.size.cmp(&eb.size),
+                SortCol::Size => ea.effective_size().cmp(&eb.effective_size()),
             };
             if sort_asc { ord } else { ord.reverse() }
         });
@@ -157,7 +255,11 @@ impl App {
                 hidden: e.hidden,
             });
         }
-        ui.set_items(ModelRc::from(Rc::new(VecModel::from(items))));
+        // Replace the contents of the existing model in one go. Keeping the
+        // same `VecModel` instance means the views' bindings, scroll offset
+        // and selection don't churn, and background size workers can
+        // continue to mutate individual rows via `set_row_data`.
+        self.items_model.set_vec(items);
 
         // Precompute grid rows based on window width.
         let tile = 110.0_f32;
@@ -222,7 +324,7 @@ impl App {
                 .file_name()
                 .map(|n| n.to_string_lossy().to_string())
                 .unwrap_or_else(|| {
-                    // Root or empty — show "/" as label on Unix.
+                    // Root or empty: show "/" as label on Unix.
                     path.to_string_lossy().to_string()
                 });
             crumbs.push(Crumb {
@@ -372,7 +474,7 @@ impl App {
     }
 
     fn push_clipboard_to_system(&self) {
-        // Write a text fallback — full x-special/gnome-copied-files clipboard
+        // Write a text fallback. Full x-special/gnome-copied-files clipboard
         // support requires raw wayland/X11 mime handling.
         if let Ok(mut cb) = arboard::Clipboard::new() {
             let paths = self.selected_paths();
@@ -664,7 +766,7 @@ fn wire_callbacks(ui: &MainWindow, app: Rc<RefCell<App>>) {
         ui.on_sidebar_clicked(move |path| {
             let s = path.as_str();
             if s == TRASH_TAG {
-                // Trash view not implemented yet — stub: open system trash dir.
+                // Trash view not implemented yet. Stub: open system trash dir.
                 if let Some(home) = dirs::home_dir() {
                     let trash = home.join(".local/share/Trash/files");
                     if trash.exists() {

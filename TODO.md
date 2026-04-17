@@ -362,20 +362,6 @@ for permission denials.
 
 ---
 
-## 17. Proper clipboard copy / cut / paste
-
-**Scope:** Works with other apps (Nautilus, Files). Currently `arboard`
-only writes text paths.
-
-**Files:** `src/clipboard.rs` (new).
-
-**Approach:** `wl-clipboard-rs` with `text/uri-list` and
-`x-special/gnome-copied-files`. Read the same on paste. X11 fallback.
-
-**Lower priority**: this app is not primarily about moving files around.
-
----
-
 ## 18. Drag-and-drop out to other apps
 
 Lower priority for a cleanup tool. If implemented, source-side DnD via
@@ -480,4 +466,13 @@ picker, path-bar autocomplete, preview pane / gallery mode, archive
 create/extract dialogs, network / GVFS mounts, desktop mode / applet,
 per-directory view settings, Ctrl+scroll zoom.
 
-Use Nautilus for those.
+**Cross-app clipboard cut/copy/paste** (uri-list,
+x-special/gnome-copied-files) is also out of scope. Space does not shuffle
+files between apps, it deletes them. The tiny clipboard story we keep:
+
+- "Copy path" already works (writes the selected paths as text, useful
+  for pasting into a terminal or editor).
+- When the user pastes a path into the path bar, navigate there. Trivial
+  follow-up to the existing path-edit mode, not worth a dedicated task.
+
+Use Nautilus for the real clipboard integration.
