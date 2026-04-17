@@ -65,12 +65,12 @@ msgstr "Abbrechen"
 #: ui/header_bar.slint:128
 msgctxt "HeaderBar"
 msgid "/path/to/somewhere"
-msgstr ""
+msgstr "/pfad/zu/irgendwo"
 
 #: ui/header_bar.slint:139
 msgctxt "HeaderBar"
 msgid "Type to search…"
-msgstr ""
+msgstr "Zum Suchen tippen..."
 
 #: ui/file_list.slint:42
 msgctxt "ListHeader"
