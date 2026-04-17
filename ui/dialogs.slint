@@ -38,7 +38,7 @@ export component RenameDialog inherits Rectangle {
     callback cancelled();
 
     visible: false;
-    in-out property <bool> shown: false;
+    in property <bool> shown: false;
 
     states [
         visible when root.shown : {
@@ -48,7 +48,7 @@ export component RenameDialog inherits Rectangle {
 
     // Fullscreen backdrop captures clicks behind the frame.
     ModalBackdrop {
-        TouchArea { clicked => { root.cancelled(); root.shown = false; } }
+        TouchArea { clicked => { root.cancelled(); } }
     }
 
     frame := DialogFrame {
@@ -62,7 +62,7 @@ export component RenameDialog inherits Rectangle {
             }
             edit := LineEdit {
                 text: root.initial-name;
-                accepted(t) => { root.accepted(t); root.shown = false; }
+                accepted(t) => { root.accepted(t); }
             }
             HorizontalLayout {
                 spacing: 10px;
@@ -70,12 +70,12 @@ export component RenameDialog inherits Rectangle {
                 padding-top: 10px;
                 TextButton {
                     text: @tr("Cancel");
-                    clicked => { root.cancelled(); root.shown = false; }
+                    clicked => { root.cancelled(); }
                 }
                 TextButton {
                     text: @tr("Rename");
                     primary: true;
-                    clicked => { root.accepted(edit.text); root.shown = false; }
+                    clicked => { root.accepted(edit.text); }
                 }
             }
         }
@@ -86,11 +86,11 @@ export component NewFolderDialog inherits Rectangle {
     callback accepted(string);
     callback cancelled();
 
-    in-out property <bool> shown: false;
+    in property <bool> shown: false;
     visible: root.shown;
 
     ModalBackdrop {
-        TouchArea { clicked => { root.cancelled(); root.shown = false; } }
+        TouchArea { clicked => { root.cancelled(); } }
     }
 
     frame := DialogFrame {
@@ -104,7 +104,7 @@ export component NewFolderDialog inherits Rectangle {
             }
             edit := LineEdit {
                 text: @tr("New folder");
-                accepted(t) => { root.accepted(t); root.shown = false; }
+                accepted(t) => { root.accepted(t); }
             }
             HorizontalLayout {
                 spacing: 10px;
@@ -112,12 +112,12 @@ export component NewFolderDialog inherits Rectangle {
                 padding-top: 10px;
                 TextButton {
                     text: @tr("Cancel");
-                    clicked => { root.cancelled(); root.shown = false; }
+                    clicked => { root.cancelled(); }
                 }
                 TextButton {
                     text: @tr("Create");
                     primary: true;
-                    clicked => { root.accepted(edit.text); root.shown = false; }
+                    clicked => { root.accepted(edit.text); }
                 }
             }
         }
@@ -132,11 +132,11 @@ export component ConfirmDialog inherits Rectangle {
     callback accepted();
     callback cancelled();
 
-    in-out property <bool> shown: false;
+    in property <bool> shown: false;
     visible: root.shown;
 
     ModalBackdrop {
-        TouchArea { clicked => { root.cancelled(); root.shown = false; } }
+        TouchArea { clicked => { root.cancelled(); } }
     }
 
     DialogFrame {
@@ -155,13 +155,13 @@ export component ConfirmDialog inherits Rectangle {
                 padding-top: 10px;
                 TextButton {
                     text: @tr("Cancel");
-                    clicked => { root.cancelled(); root.shown = false; }
+                    clicked => { root.cancelled(); }
                 }
                 TextButton {
                     text: root.confirm-label;
                     primary: !root.danger;
                     danger: root.danger;
-                    clicked => { root.accepted(); root.shown = false; }
+                    clicked => { root.accepted(); }
                 }
             }
         }
