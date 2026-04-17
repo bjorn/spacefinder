@@ -235,12 +235,12 @@ msgstr ""
 
 #: src/controller.rs
 msgctxt "Rust"
-msgid "{} item"
-msgid_plural "{} items"
+msgid "{} item, {}"
+msgid_plural "{} items, {}"
 msgstr[0] ""
 msgstr[1] ""
 
 #: src/controller.rs
 msgctxt "Rust"
-msgid "{} of {} selected"
+msgid "{} of {} selected, {} of {}"
 msgstr ""

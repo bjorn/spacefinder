@@ -96,6 +96,22 @@ pub fn scan(dir: &Path) -> std::io::Result<Vec<Entry>> {
     Ok(out)
 }
 
+/// Sum up the known sizes across a slice of entries, reporting whether any of
+/// them still have a pending or failed size lookup. The boolean is true if any
+/// entry is still `Calculating` or `Unknown`, which the caller uses to append a
+/// trailing `+` to the formatted total.
+pub fn total_known_sizes(entries: &[&Entry]) -> (u64, bool) {
+    let mut sum: u64 = 0;
+    let mut any_unknown = false;
+    for e in entries {
+        match e.size_state {
+            SizeState::Known(n) => sum = sum.saturating_add(n),
+            SizeState::Calculating | SizeState::Unknown => any_unknown = true,
+        }
+    }
+    (sum, any_unknown)
+}
+
 #[derive(Copy, Clone)]
 pub enum SortCol {
     Name,

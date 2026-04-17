@@ -5,6 +5,7 @@ use crate::i18n::{tr, tr_fmt, tr_n_fmt};
 use crate::icons::Icons;
 use crate::sidebar::{self, TRASH_TAG};
 use crate::{Crumb, FileItem, FileListState, GridCell, GridRow, MainWindow, MenuEntry};
+use humansize::{format_size, BINARY};
 use rustc_hash::FxHashSet;
 use slint::{ComponentHandle, Global, Model, ModelRc, SharedString, VecModel};
 use std::cell::{Cell, RefCell};
@@ -529,10 +530,33 @@ impl App {
 
         let total = self.filtered.len();
         let sel = self.selection.len();
+
+        // Sum the sizes of all visible entries (folder total).
+        let visible_entries: Vec<&Entry> =
+            self.filtered.iter().map(|&i| &self.entries[i]).collect();
+        let (folder_bytes, folder_pending) = fs_scan::total_known_sizes(&visible_entries);
+        let folder_size_text = format_total(folder_bytes, folder_pending);
+
         let status = if sel == 0 {
-            tr_n_fmt("{} item", "{} items", total, &[&total])
+            tr_n_fmt(
+                "{} item, {}",
+                "{} items, {}",
+                total,
+                &[&total, &folder_size_text],
+            )
         } else {
-            tr_fmt("{} of {} selected", &[&sel, &total])
+            let selected_entries: Vec<&Entry> = self
+                .selection
+                .iter()
+                .filter_map(|&i| self.filtered.get(i))
+                .map(|&eidx| &self.entries[eidx])
+                .collect();
+            let (sel_bytes, sel_pending) = fs_scan::total_known_sizes(&selected_entries);
+            let sel_size_text = format_total(sel_bytes, sel_pending);
+            tr_fmt(
+                "{} of {} selected, {} of {}",
+                &[&sel, &total, &sel_size_text, &folder_size_text],
+            )
         };
         ui.set_status_text(status.into());
     }
@@ -956,6 +980,14 @@ fn view_mode_to_config(m: i32) -> config::ViewMode {
     } else {
         config::ViewMode::List
     }
+}
+
+/// Format a byte total for the status bar. When `pending` is true, some
+/// directory sizes are still being computed (or were unreadable), so append a
+/// `+` to signal that the displayed number is a lower bound and may grow.
+fn format_total(bytes: u64, pending: bool) -> String {
+    let base = format_size(bytes, BINARY);
+    if pending { format!("{}+", base) } else { base }
 }
 
 #[cfg(test)]

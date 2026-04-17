@@ -235,12 +235,12 @@ msgstr "Löschen"
 
 #: src/controller.rs
 msgctxt "Rust"
-msgid "{} item"
-msgid_plural "{} items"
-msgstr[0] "{} Eintrag"
-msgstr[1] "{} Einträge"
+msgid "{} item, {}"
+msgid_plural "{} items, {}"
+msgstr[0] "{} Eintrag, {}"
+msgstr[1] "{} Einträge, {}"
 
 #: src/controller.rs
 msgctxt "Rust"
-msgid "{} of {} selected"
-msgstr "{} von {} ausgewählt"
+msgid "{} of {} selected, {} of {}"
+msgstr "{} von {} ausgewählt, {} von {}"
