@@ -394,6 +394,12 @@ impl App {
         for (path, state) in updates {
             self.on_size_update_inner(&path, state);
         }
+        // The batched drain path bypasses `push_ui_state`, so the status bar
+        // would otherwise stay stuck on whatever value was computed at
+        // navigation time (typically a lower bound with a trailing `+`).
+        // Refresh just the status string here so totals converge once all
+        // pending sizes arrive, without rebuilding crumbs/tiles/sidebar.
+        self.refresh_status_text();
     }
 
     fn on_size_update_inner(&mut self, path: &Path, state: SizeState) {
@@ -528,6 +534,23 @@ impl App {
         });
         ui.set_sort_asc(self.sort_asc);
 
+        ui.set_status_text(self.compute_status_text().into());
+    }
+
+    /// Rebuild just the status-bar string from current state and push it to
+    /// the UI. Unlike [`App::push_ui_state`] this touches no other UI models
+    /// (no crumbs, tile grid, sidebar path, etc.), so it is safe and cheap to
+    /// call from the coalesced size-update drain where rebuilding everything
+    /// would defeat the responsiveness batching.
+    fn refresh_status_text(&self) {
+        let Some(ui) = self.ui.upgrade() else { return };
+        ui.set_status_text(self.compute_status_text().into());
+    }
+
+    /// Compute the status-bar string from the current filtered entries and
+    /// selection. Shared between [`App::push_ui_state`] and
+    /// [`App::refresh_status_text`].
+    fn compute_status_text(&self) -> String {
         let total = self.filtered.len();
         let sel = self.selection.len();
 
@@ -537,7 +560,7 @@ impl App {
         let (folder_bytes, folder_pending) = fs_scan::total_known_sizes(&visible_entries);
         let folder_size_text = format_total(folder_bytes, folder_pending);
 
-        let status = if sel == 0 {
+        if sel == 0 {
             tr_n_fmt(
                 "{} item, {}",
                 "{} items, {}",
@@ -557,8 +580,7 @@ impl App {
                 "{} of {} selected, {} of {}",
                 &[&sel, &total, &sel_size_text, &folder_size_text],
             )
-        };
-        ui.set_status_text(status.into());
+        }
     }
 
     fn build_crumbs(&self) -> Vec<Crumb> {
