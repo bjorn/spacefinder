@@ -71,13 +71,15 @@ pub struct App {
     view_mode: i32,
 
     /// Icicle columns view state. Only meaningful while `view_mode == 2`.
-    /// `columns_root` can differ from `current` because the columns view
-    /// zooms independently of the file list's notion of the active
-    /// directory.
-    columns_root: PathBuf,
-    /// Last-seen view height in logical px, published by the Slint side.
-    /// Re-layouts use this as the full column span.
-    columns_view_height: f32,
+    /// The root is now `self.current`; column view shares navigation
+    /// with list/grid/crumbs so there is no separate root field.
+    ///
+    /// `column_selected_path` holds the single path a left-click on a
+    /// cell has "selected" for highlighting and right-click context-menu
+    /// targeting. Distinct from `selection` (indices into `filtered`)
+    /// because the columns view shows paths that may not be direct
+    /// children of `current`.
+    column_selected_path: Option<PathBuf>,
     /// Shared Slint model backing the columns view. Replaced wholesale on
     /// every [`App::recompute_columns`] rather than mutated row-by-row,
     /// because the layout is a single pass and the cell count varies.
@@ -144,8 +146,7 @@ impl App {
             generation: 0,
             size_engine: Arc::new(SizeEngine::new()),
             view_mode,
-            columns_root: start.clone(),
-            columns_view_height: 0.0,
+            column_selected_path: None,
             columns_model,
             window_size: cfg.window_size,
             last_save: None,
@@ -281,66 +282,27 @@ impl App {
         }
     }
 
-    /// Run the icicle layout against the current `columns_root` and
-    /// push the resulting cells into the Slint `VecModel`. Cheap: walks
-    /// at most [`columns::VISIBLE_COLUMNS`] levels and skips cells
-    /// thinner than one logical pixel, so the total cell count stays
-    /// bounded by the view height regardless of tree size.
+    /// Run the icicle layout against the current directory and push
+    /// the resulting cells into the Slint `VecModel`. Cheap: walks at
+    /// most [`columns::VISIBLE_COLUMNS`] levels and skips cells thinner
+    /// than one logical pixel, so the total cell count stays bounded
+    /// regardless of tree size.
     ///
-    /// The view height is queried from the live `Window` each time rather
-    /// than being pushed from a Slint `changed` handler. That keeps the
-    /// Slint side free of reactive callbacks that fed back into the same
-    /// bindings during init (which tripped the binding-loop detector).
-    /// The tradeoff: cells only re-layout on click/size-batch events,
-    /// not live during drag-resize.
+    /// Layout is produced in fractional coordinates (`y_start`, `y_end`
+    /// in `[0.0, 1.0]`). The Slint side multiplies by its live inner
+    /// height to turn fractions into pixels, so a window resize reflows
+    /// every cell with no Rust round-trip. This means the layout does
+    /// not depend on the window size at all and the previous
+    /// `changed content-h` callback is not needed, avoiding the binding
+    /// loop it used to trip.
     fn recompute_columns(&self) {
-        let h = self.current_view_height();
-        let laid = columns::lay_out(&self.columns_root, h);
+        let laid = columns::lay_out(&self.current);
+        let selected = self.column_selected_path.as_deref();
         let cells: Vec<ColumnCell> = laid
             .into_iter()
-            .map(|c| laid_cell_to_ui(&c))
+            .map(|c| laid_cell_to_ui(&c, selected))
             .collect();
         self.columns_model.set_vec(cells);
-    }
-
-    /// Best-effort query of the current column-view height in logical px.
-    /// Falls back to the last-seen cached value when the window isn't up
-    /// yet. The returned value is also written back to
-    /// `columns_view_height` so subsequent calls without a live window
-    /// still return a sensible number.
-    fn current_view_height(&self) -> f32 {
-        if let Some(ui) = self.ui.upgrade() {
-            let size = ui.window().size();
-            let scale = ui.window().scale_factor();
-            if scale > 0.0 && size.height > 0 {
-                return (size.height as f32 / scale).max(0.0);
-            }
-        }
-        self.columns_view_height
-    }
-
-    /// Set the columns view's root and trigger a re-layout. Used by
-    /// zoom-in (click on a column >= 1 dir cell) and zoom-out (click on
-    /// the col-0 cell).
-    fn set_columns_root(&mut self, path: PathBuf) {
-        if path == self.columns_root {
-            return;
-        }
-        self.columns_root = path;
-        self.recompute_columns();
-        // Spawn size jobs for the new root so missing cache entries
-        // settle; without this, zooming into a cold subtree would stay
-        // pending forever.
-        self.spawn_columns_size_jobs();
-    }
-
-    /// Zoom out by one level: the current `columns_root`'s parent
-    /// becomes the root. No-op at the filesystem root.
-    fn column_zoom_out(&mut self) {
-        if let Some(parent) = self.columns_root.parent() {
-            let parent = parent.to_path_buf();
-            self.set_columns_root(parent);
-        }
     }
 
     /// Schedule directory-size computation for every directory path
@@ -366,8 +328,8 @@ impl App {
 
         let mut visible: FxHashSet<PathBuf> = FxHashSet::default();
         // The root itself settles at the top of the walk; pick it up.
-        visible.insert(self.columns_root.clone());
-        if let Ok(canon) = std::fs::canonicalize(&self.columns_root) {
+        visible.insert(self.current.clone());
+        if let Ok(canon) = std::fs::canonicalize(&self.current) {
             visible.insert(canon);
         }
         // Every directory path referenced by a currently-laid cell.
@@ -436,7 +398,7 @@ impl App {
                     });
                 }
             });
-        engine.compute(self.columns_root.clone(), generation, on_progress);
+        engine.compute(self.current.clone(), generation, on_progress);
     }
 
     /// Queue a recursive-size computation for every directory in the current
@@ -830,7 +792,13 @@ impl App {
         self.search.clear();
         self.selection.clear();
         self.last_clicked = None;
+        self.column_selected_path = None;
         self.refresh();
+        // `refresh` handles `recompute_columns`, but column-mode also
+        // needs size jobs for the new root so deep descendants settle.
+        if self.view_mode == 2 {
+            self.spawn_columns_size_jobs();
+        }
         self.persist();
     }
 
@@ -841,7 +809,11 @@ impl App {
         self.history_i -= 1;
         self.current = self.history[self.history_i].clone();
         self.selection.clear();
+        self.column_selected_path = None;
         self.refresh();
+        if self.view_mode == 2 {
+            self.spawn_columns_size_jobs();
+        }
         self.persist();
     }
 
@@ -852,7 +824,11 @@ impl App {
         self.history_i += 1;
         self.current = self.history[self.history_i].clone();
         self.selection.clear();
+        self.column_selected_path = None;
         self.refresh();
+        if self.view_mode == 2 {
+            self.spawn_columns_size_jobs();
+        }
         self.persist();
     }
 
@@ -919,6 +895,13 @@ impl App {
     }
 
     fn selected_paths(&self) -> Vec<PathBuf> {
+        // In column mode, the "selection" is the single path the user
+        // last clicked in the icicle view. Context-menu actions (Open,
+        // Copy, Cut, Rename, Trash, Delete) operate on that path. In
+        // list/grid mode, fall back to the index-based selection.
+        if self.view_mode == 2 {
+            return self.column_selected_path.iter().cloned().collect();
+        }
         self.selection
             .iter()
             .filter_map(|&idx| self.filtered.get(idx))
@@ -929,6 +912,17 @@ impl App {
     // === Context menu actions ===
 
     fn ctx_open(&mut self) {
+        if self.view_mode == 2 {
+            if let Some(path) = self.column_selected_path.clone() {
+                let is_dir = path.is_dir();
+                // Root detection: column-selected path equals the
+                // current directory. In that case Open behaves as
+                // zoom-out just like a double-click on col-0.
+                let is_root = path == self.current;
+                self.on_column_cell_double_click(path, is_dir, is_root);
+            }
+            return;
+        }
         if let Some(idx) = self.last_clicked {
             self.double_click(idx);
         }
@@ -1059,6 +1053,52 @@ impl App {
         ui.set_confirm_shown(true);
     }
 
+    /// Column view: single left-click on a cell selects it (highlights
+    /// only, no navigation).
+    fn on_column_cell_click(&mut self, path: PathBuf) {
+        self.column_selected_path = Some(path);
+        self.recompute_columns();
+    }
+
+    /// Column view: double left-click. Directories zoom in (navigate
+    /// into the subtree); the root cell zooms out (navigate to the
+    /// current directory's parent). Files fall through to the OS
+    /// default-handler, matching list/grid semantics.
+    fn on_column_cell_double_click(
+        &mut self,
+        path: PathBuf,
+        is_dir: bool,
+        is_root: bool,
+    ) {
+        if is_root {
+            if let Some(parent) = self.current.parent() {
+                self.navigate(parent.to_path_buf());
+            }
+            return;
+        }
+        if is_dir {
+            self.navigate(path);
+        } else if let Err(e) = open::that_detached(&path) {
+            log::warn!("open failed: {}", e);
+        }
+    }
+
+    /// Column view: right-click on a cell opens the same item-context
+    /// menu as list/grid. The clicked path becomes the column
+    /// selection; the menu's actions will operate on that path via
+    /// [`App::selected_paths`] in column mode.
+    fn on_column_cell_right_click(&mut self, path: PathBuf, x: f32, y: f32) {
+        self.column_selected_path = Some(path);
+        self.recompute_columns();
+        // Reuse the list/grid menu-build path. No duplication.
+        let Some(ui) = self.ui.upgrade() else { return };
+        let entries = item_menu(self);
+        ui.set_context_entries(ModelRc::from(Rc::new(VecModel::from(entries))));
+        ui.set_context_x(x);
+        ui.set_context_y(y);
+        ui.set_context_visible(true);
+    }
+
     fn apply_confirm(&mut self) {
         let action = self.pending_confirm.take();
         match action {
@@ -1145,12 +1185,8 @@ impl App {
             // re-push to recompute grid rows for new mode width assumptions
         }
         if mode == 2 {
-            // First time entering column view: seed the root from the
-            // currently-viewed directory. Subsequent zoom-in/out calls
-            // mutate `columns_root` directly without resetting it.
-            if self.columns_root != self.current {
-                self.columns_root = self.current.clone();
-            }
+            // Column view is rooted at `self.current`, same as list/grid.
+            // No separate root to seed; just lay out and warm sizes.
             self.recompute_columns();
             self.spawn_columns_size_jobs();
         }
@@ -1307,9 +1343,12 @@ fn format_total(bytes: u64, pending: bool) -> String {
 }
 
 /// Convert a `columns::LaidCell` into the Slint-facing `ColumnCell`
-/// struct. Mostly a mechanical mapping; `y-start`/`y-end` are logical
-/// pixels so they flow into Slint's `length` unit directly.
-fn laid_cell_to_ui(c: &LaidCell) -> ColumnCell {
+/// struct. `y_start`/`y_end` are fractions in `[0.0, 1.0]`; the Slint
+/// side multiplies by the live column height to produce pixels.
+/// `selected` is set when `c.path` matches the controller's currently
+/// column-selected path.
+fn laid_cell_to_ui(c: &LaidCell, selected: Option<&Path>) -> ColumnCell {
+    let is_selected = selected.map(|p| p == c.path.as_path()).unwrap_or(false);
     ColumnCell {
         name: c.name.clone().into(),
         size_text: c.size_text.clone().into(),
@@ -1320,6 +1359,7 @@ fn laid_cell_to_ui(c: &LaidCell) -> ColumnCell {
         pending: c.pending,
         path: c.path.to_string_lossy().to_string().into(),
         is_root: c.is_root,
+        selected: is_selected,
     }
 }
 
@@ -1693,18 +1733,23 @@ fn wire_callbacks(ui: &MainWindow, app: Rc<RefCell<App>>) {
     }
     {
         let app = app.clone();
-        ui.on_columns_cell_clicked(move |path, is_dir, is_root| {
-            let mut a = app.borrow_mut();
+        ui.on_columns_cell_clicked(move |path| {
             let path = PathBuf::from(path.as_str());
-            if is_root {
-                a.column_zoom_out();
-            } else if is_dir {
-                a.set_columns_root(path);
-            } else {
-                // Files are clickable, but for now we only log the
-                // click. A future preview pane would hook in here.
-                log::debug!("columns-view: file clicked {}", path.display());
-            }
+            app.borrow_mut().on_column_cell_click(path);
+        });
+    }
+    {
+        let app = app.clone();
+        ui.on_columns_cell_double_clicked(move |path, is_dir, is_root| {
+            let path = PathBuf::from(path.as_str());
+            app.borrow_mut().on_column_cell_double_click(path, is_dir, is_root);
+        });
+    }
+    {
+        let app = app.clone();
+        ui.on_item_path_right_clicked(move |path, x, y| {
+            let path = PathBuf::from(path.as_str());
+            app.borrow_mut().on_column_cell_right_click(path, x, y);
         });
     }
 }

@@ -4,18 +4,24 @@ export struct ColumnCell {
     name: string,
     size-text: string,
     col: int,
-    y-start: length,
-    y-end: length,
+    y-start: float,
+    y-end: float,
     is-dir: bool,
     pending: bool,
     path: string,
     is-root: bool,
+    selected: bool,
 }
 
 export component ColumnsView inherits Rectangle {
     in property <[ColumnCell]> cells;
     in property <int> visible-columns: 5;
-    callback cell-clicked(string, bool, bool);
+    // Single left-click: select the cell.
+    callback cell-clicked(string);
+    // Double left-click: zoom in (dir) or go up (root).
+    callback cell-double-clicked(string, bool, bool);
+    // Right-click: open the context menu at screen-relative (x, y).
+    callback cell-right-clicked(string, length, length);
 
     background: Theme.bg;
 
@@ -28,24 +34,28 @@ export component ColumnsView inherits Rectangle {
     // Inner Rectangle wraps the absolutely-positioned children so they
     // cannot feed back into the root's intrinsic-size inference during
     // the first binding pass. Its explicit width/height make it the
-    // coordinate system the cells live inside.
-    Rectangle {
+    // coordinate system the cells live inside. Cells derive their pixel
+    // positions from this rectangle's live height, so a window resize
+    // reflows every cell with zero Rust round-trip.
+    inner := Rectangle {
         width: parent.width;
         height: parent.height;
 
         for cell in root.cells : Rectangle {
             x: root.h-pad + cell.col * (root.col-w + root.col-spacing);
-            y: root.h-pad + cell.y-start;
+            y: root.h-pad + cell.y-start * inner.height;
             width: root.col-w;
-            height: max(0px, cell.y-end - cell.y-start);
+            height: max(0px, (cell.y-end - cell.y-start) * inner.height);
             border-width: 1px;
             border-color: Theme.divider;
             border-radius: 2px;
-            background: touch.pressed
-                ? Theme.bg-pressed
-                : touch.has-hover
-                    ? Theme.bg-hover
-                    : cell.is-dir ? Theme.bg-elevated : Theme.bg-component;
+            background: cell.selected
+                ? Theme.selection-bg
+                : touch.pressed
+                    ? Theme.bg-pressed
+                    : touch.has-hover
+                        ? Theme.bg-hover
+                        : cell.is-dir ? Theme.bg-elevated : Theme.bg-component;
             clip: true;
 
             Text {
@@ -64,8 +74,22 @@ export component ColumnsView inherits Rectangle {
 
             touch := TouchArea {
                 mouse-cursor: pointer;
+                pointer-event(ev) => {
+                    if (ev.button == PointerEventButton.right && ev.kind == PointerEventKind.down) {
+                        // Screen-relative coordinates, matching the
+                        // list and grid views' convention.
+                        root.cell-right-clicked(
+                            cell.path,
+                            self.mouse-x + parent.absolute-position.x,
+                            self.mouse-y + parent.absolute-position.y,
+                        );
+                    }
+                }
                 clicked => {
-                    root.cell-clicked(cell.path, cell.is-dir, cell.is-root);
+                    root.cell-clicked(cell.path);
+                }
+                double-clicked => {
+                    root.cell-double-clicked(cell.path, cell.is-dir, cell.is-root);
                 }
             }
         }

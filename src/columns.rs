@@ -16,8 +16,15 @@
 //!   recomputation is triggered by the controller on every batched size
 //!   update, so pending cells settle as the walker reports.
 //!
+//! Layout is produced in fractional coordinates: each cell carries a
+//! `y_start` and `y_end` in `[0.0, 1.0]` relative to the usable column
+//! height. The Slint side multiplies these by its live inner height to
+//! produce pixel positions, so window resizes reflow entirely in the
+//! render layer without round-tripping through Rust (and without the
+//! binding loop the previous pixel-based implementation risked).
+//!
 //! The algorithm is strictly capped at [`VISIBLE_COLUMNS`] depth and
-//! skips cells smaller than [`MIN_RENDERABLE_PX`] so very large trees
+//! skips cells thinner than [`MIN_RENDERABLE_FRAC`] so very large trees
 //! (`~$HOME`) never blow out allocations or swamp the renderer.
 //!
 //! The controller is the only caller; this module is pure data massaging.
@@ -31,15 +38,21 @@ use std::path::{Path, PathBuf};
 /// is cut off; the user zooms into a subtree to see its descendants.
 pub const VISIBLE_COLUMNS: usize = 5;
 
-/// Any cell shorter than this in logical pixels is skipped. Both keeps
-/// rendering cheap and avoids pushing invisible cells into the Slint
-/// model when a subtree has thousands of tiny entries.
-const MIN_RENDERABLE_PX: f32 = 1.0;
+/// Any cell whose vertical span is smaller than this fraction of the
+/// full column height is skipped. At a typical 800 px column this is
+/// about one logical pixel, which keeps rendering cheap and avoids
+/// pushing invisible cells into the Slint model when a subtree has
+/// thousands of tiny entries.
+const MIN_RENDERABLE_FRAC: f32 = 1.0 / 800.0;
 
 /// A positioned cell in the icicle layout. Mirrors the Slint
 /// `ColumnCell` struct (see `ui/columns_view.slint`), but carries an
 /// owned `PathBuf` rather than the Slint `string` form so callers can
 /// pass it back through path APIs without reparsing.
+///
+/// `y_start` and `y_end` are fractions in `[0.0, 1.0]` of the column's
+/// usable height. The Slint side applies the live height to produce
+/// pixels.
 #[derive(Debug, Clone)]
 pub struct LaidCell {
     pub col: usize,
@@ -96,14 +109,14 @@ fn read_children(parent: &Path) -> Vec<RawChild> {
     out
 }
 
-/// Build the complete flat cell list for `root` within a view of
-/// `view_height` logical pixels. The output always contains exactly
-/// one col-0 cell for the root; deeper columns may be sparse.
-pub fn lay_out(root: &Path, view_height: f32) -> Vec<LaidCell> {
+/// Build the complete flat cell list for `root` in fractional
+/// coordinates. `y_start` and `y_end` on every emitted cell are in
+/// `[0.0, 1.0]` relative to the column's usable height; the Slint side
+/// multiplies them by its live inner height to place cells. The output
+/// always contains exactly one col-0 cell for the root; deeper columns
+/// may be sparse.
+pub fn lay_out(root: &Path) -> Vec<LaidCell> {
     let mut cells = Vec::new();
-    if view_height <= 0.0 {
-        return cells;
-    }
 
     // Root cell: fill the whole column. Its size is the cached total (if
     // any); a miss renders as pending with size 0, because we have no
@@ -122,18 +135,19 @@ pub fn lay_out(root: &Path, view_height: f32) -> Vec<LaidCell> {
         size_text: format_cell_size(root_size, root_pending),
         is_dir: true,
         y_start: 0.0,
-        y_end: view_height,
+        y_end: 1.0,
         path: root.to_path_buf(),
         pending: root_pending,
         is_root: true,
     });
 
-    lay_out_children(root, 0.0, view_height, 1, &mut cells);
+    lay_out_children(root, 0.0, 1.0, 1, &mut cells);
     cells
 }
 
 /// Recursive helper. `depth` is the target column for the children of
-/// `parent_path`. Bails out at `VISIBLE_COLUMNS`.
+/// `parent_path`. Bails out at `VISIBLE_COLUMNS`. `y_start` and `y_end`
+/// are fractions of the column's usable height.
 fn lay_out_children(
     parent_path: &Path,
     y_start: f32,
@@ -145,7 +159,7 @@ fn lay_out_children(
         return;
     }
     let span = y_end - y_start;
-    if span < MIN_RENDERABLE_PX {
+    if span < MIN_RENDERABLE_FRAC {
         return;
     }
 
@@ -177,7 +191,7 @@ fn lay_out_children(
         let frac = e.size as f32 / total as f32;
         let h = span * frac;
         let cell_y_end = (cursor + h).min(y_end);
-        if h < MIN_RENDERABLE_PX {
+        if h < MIN_RENDERABLE_FRAC {
             // Too small to render. Advance the cursor so siblings
             // remain proportional, but push no cell and do not recurse.
             cursor = cell_y_end;
@@ -220,22 +234,26 @@ mod tests {
         // Use a directory that definitely exists but whose size we do
         // not pre-cache: the test temp dir. The cache miss means the
         // root will be flagged pending, but it must still be emitted
-        // with col=0 and the full vertical span.
+        // with col=0 and the full fractional span.
         let dir = std::env::temp_dir();
-        let cells = lay_out(&dir, 800.0);
+        let cells = lay_out(&dir);
         assert!(!cells.is_empty(), "lay_out must always emit the root cell");
         let root = &cells[0];
         assert_eq!(root.col, 0);
         assert_eq!(root.y_start, 0.0);
-        assert!((root.y_end - 800.0).abs() < 0.01);
+        assert!((root.y_end - 1.0).abs() < 1e-6);
         assert!(root.is_root);
         assert!(root.is_dir);
     }
 
     #[test]
-    fn zero_view_height_emits_nothing() {
+    fn cells_stay_within_unit_interval() {
         let dir = std::env::temp_dir();
-        let cells = lay_out(&dir, 0.0);
-        assert!(cells.is_empty());
+        let cells = lay_out(&dir);
+        for c in &cells {
+            assert!(c.y_start >= 0.0);
+            assert!(c.y_end <= 1.0 + 1e-5);
+            assert!(c.y_end >= c.y_start);
+        }
     }
 }

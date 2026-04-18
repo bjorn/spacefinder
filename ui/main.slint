@@ -79,7 +79,13 @@ export component MainWindow inherits Window {
     callback confirm-accepted();
 
     // Columns view events.
-    callback columns-cell-clicked(string, bool, bool);
+    callback columns-cell-clicked(string);
+    callback columns-cell-double-clicked(string, bool, bool);
+    // Right-click on a column cell opens the item context menu at the
+    // given screen-relative position. Path-keyed so the handler can
+    // operate directly on the clicked cell, unlike the list/grid
+    // `item-right-clicked` callback which uses an index into `items`.
+    callback item-path-right-clicked(string, length, length);
 
     callback key-pressed(string) -> bool;
 
@@ -164,8 +170,14 @@ export component MainWindow inherits Window {
                     }
                     if root.view-mode == 2 : ColumnsView {
                         cells: root.column-cells;
-                        cell-clicked(path, is-dir, is-root) => {
-                            root.columns-cell-clicked(path, is-dir, is-root);
+                        cell-clicked(path) => {
+                            root.columns-cell-clicked(path);
+                        }
+                        cell-double-clicked(path, is-dir, is-root) => {
+                            root.columns-cell-double-clicked(path, is-dir, is-root);
+                        }
+                        cell-right-clicked(path, x, y) => {
+                            root.item-path-right-clicked(path, x, y);
                         }
                     }
 
