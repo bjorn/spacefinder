@@ -52,15 +52,16 @@ component Breadcrumbs inherits Rectangle {
                 t := TouchArea {
                     mouse-cursor: pointer;
                     clicked => { root.crumb-clicked(crumb.path); }
+                    double-clicked => { root.edit-requested(); }
                 }
             }
         }
-        Rectangle { horizontal-stretch: 1; }
-    }
-
-    // Double-click anywhere on the bar switches to edit mode.
-    TouchArea {
-        double-clicked => { root.edit-requested(); }
+        Rectangle {
+            horizontal-stretch: 1;
+            TouchArea {
+                double-clicked => { root.edit-requested(); }
+            }
+        }
     }
 }
 
