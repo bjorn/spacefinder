@@ -105,6 +105,14 @@ fn lookup_cached(dir: &Path) -> Option<(CacheKey, u64)> {
     cache.get(&key).copied().map(|s| (key, s))
 }
 
+/// Synchronous cache probe for callers that need just the size. Returns
+/// `None` on a cache miss or any I/O error reading the directory's
+/// mtime. Does not schedule a walk; use [`SizeEngine::compute`] if a
+/// miss should trigger background work.
+pub fn lookup_cached_size(dir: &Path) -> Option<u64> {
+    lookup_cached(dir).map(|(_, size)| size)
+}
+
 /// Perform the full walk for `root`, populate the cache, and emit
 /// `on_progress` for every directory encountered.
 fn walk_and_aggregate(

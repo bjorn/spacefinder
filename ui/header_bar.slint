@@ -152,6 +152,11 @@ export component HeaderBar inherits Rectangle {
             toggled: root.view-mode == 1;
             clicked => { root.view-mode-changed(1); }
         }
+        IconButton {
+            icon: @image-url("icons/view-columns.svg");
+            toggled: root.view-mode == 2;
+            clicked => { root.view-mode-changed(2); }
+        }
         Rectangle { width: 4px; }
         IconButton {
             icon: @image-url("icons/menu.svg");

@@ -3,10 +3,11 @@ import { HeaderBar, Crumb } from "header_bar.slint";
 import { Sidebar, SidebarItem } from "sidebar.slint";
 import { FileListView, FileItem, FileListState } from "file_list.slint";
 import { FileGridView } from "file_grid.slint";
+import { ColumnsView, ColumnCell } from "columns_view.slint";
 import { ContextMenu, MenuEntry } from "context_menu.slint";
 import { RenameDialog, NewFolderDialog, ConfirmDialog } from "dialogs.slint";
 
-export { FileListState }
+export { FileListState, ColumnCell }
 
 export component MainWindow inherits Window {
     title: "Space";
@@ -27,11 +28,14 @@ export component MainWindow inherits Window {
     in property <bool> can-forward;
     in property <bool> can-up;
     in property <[FileItem]> items;
-    in-out property <int> view-mode: 0;  // 0=list 1=grid
+    in-out property <int> view-mode: 0;  // 0=list 1=grid 2=columns
     in property <int> sort-col: 0;
     in property <bool> sort-asc: true;
     in property <string> status-text;
     in property <string> device-text;
+
+    // Icicle columns view state.
+    in property <[ColumnCell]> column-cells;
 
     // Context menu state
     in property <[MenuEntry]> context-entries;
@@ -73,6 +77,10 @@ export component MainWindow inherits Window {
     callback new-folder-accepted(string);
     callback rename-dialog-accepted(string);
     callback confirm-accepted();
+
+    // Columns view events.
+    callback columns-cell-clicked(string, bool, bool);
+    callback columns-view-height-changed(length);
 
     callback key-pressed(string) -> bool;
 
@@ -154,6 +162,15 @@ export component MainWindow inherits Window {
                         background-clicked => { root.background-clicked(); }
                         rename-submitted(i, n) => { root.rename-submitted(i, n); }
                         rename-cancelled => { root.rename-cancelled(); }
+                    }
+                    if root.view-mode == 2 : ColumnsView {
+                        cells: root.column-cells;
+                        cell-clicked(path, is-dir, is-root) => {
+                            root.columns-cell-clicked(path, is-dir, is-root);
+                        }
+                        view-height-changed(h) => {
+                            root.columns-view-height-changed(h);
+                        }
                     }
 
                     // Status bar

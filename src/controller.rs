@@ -1,3 +1,4 @@
+use crate::columns::{self, LaidCell};
 use crate::config::{self, Config};
 use crate::dir_size::SizeEngine;
 use crate::disk;
@@ -5,7 +6,7 @@ use crate::fs_scan::{self, Entry, SizeState, SortCol};
 use crate::i18n::{tr, tr_fmt, tr_n_fmt};
 use crate::icons::Icons;
 use crate::sidebar::{self, TRASH_TAG};
-use crate::{Crumb, FileItem, FileListState, MainWindow, MenuEntry};
+use crate::{ColumnCell, Crumb, FileItem, FileListState, MainWindow, MenuEntry};
 use humansize::{format_size, BINARY};
 use rustc_hash::FxHashSet;
 use slint::{ComponentHandle, Global, Model, ModelRc, SharedString, VecModel};
@@ -66,8 +67,21 @@ pub struct App {
 
     /// Current `view_mode` from the Slint side. Rust is the source of truth
     /// for persistence: we mirror UI changes in here via `set_view_mode`.
-    /// 0 = list, 1 = grid, matching `ui/main.slint`.
+    /// 0 = list, 1 = grid, 2 = columns. Matches `ui/main.slint`.
     view_mode: i32,
+
+    /// Icicle columns view state. Only meaningful while `view_mode == 2`.
+    /// `columns_root` can differ from `current` because the columns view
+    /// zooms independently of the file list's notion of the active
+    /// directory.
+    columns_root: PathBuf,
+    /// Last-seen view height in logical px, published by the Slint side.
+    /// Re-layouts use this as the full column span.
+    columns_view_height: f32,
+    /// Shared Slint model backing the columns view. Replaced wholesale on
+    /// every [`App::recompute_columns`] rather than mutated row-by-row,
+    /// because the layout is a single pass and the cell count varies.
+    columns_model: Rc<VecModel<ColumnCell>>,
     /// Last-observed window size, in logical pixels. Refreshed on every
     /// `persist()` call so a final `on_close_requested` save catches the
     /// latest dimensions.
@@ -98,6 +112,8 @@ impl App {
         let sidebar_items = sidebar::build(&icons);
         let items_model = Rc::new(VecModel::<FileItem>::default());
         ui.set_items(ModelRc::from(items_model.clone()));
+        let columns_model = Rc::new(VecModel::<ColumnCell>::default());
+        ui.set_column_cells(ModelRc::from(columns_model.clone()));
 
         // Translate the persisted sort column enum into the controller's
         // runtime enum. Keep the two types decoupled so the on-disk format
@@ -128,6 +144,9 @@ impl App {
             generation: 0,
             size_engine: Arc::new(SizeEngine::new()),
             view_mode,
+            columns_root: start.clone(),
+            columns_view_height: 0.0,
+            columns_model,
             window_size: cfg.window_size,
             last_save: None,
             save_scheduled: Rc::new(Cell::new(false)),
@@ -257,6 +276,143 @@ impl App {
         self.rebuild_view();
         self.push_ui_state();
         self.spawn_size_jobs();
+        if self.view_mode == 2 {
+            self.recompute_columns();
+        }
+    }
+
+    /// Run the icicle layout against the current `columns_root` and
+    /// push the resulting cells into the Slint `VecModel`. Cheap: walks
+    /// at most [`columns::VISIBLE_COLUMNS`] levels and skips cells
+    /// thinner than one logical pixel, so the total cell count stays
+    /// bounded by the view height regardless of tree size.
+    fn recompute_columns(&self) {
+        let laid = columns::lay_out(&self.columns_root, self.columns_view_height);
+        let cells: Vec<ColumnCell> = laid
+            .into_iter()
+            .map(|c| laid_cell_to_ui(&c))
+            .collect();
+        self.columns_model.set_vec(cells);
+    }
+
+    /// Set the columns view's root and trigger a re-layout. Used by
+    /// zoom-in (click on a column >= 1 dir cell) and zoom-out (click on
+    /// the col-0 cell).
+    fn set_columns_root(&mut self, path: PathBuf) {
+        if path == self.columns_root {
+            return;
+        }
+        self.columns_root = path;
+        self.recompute_columns();
+        // Spawn size jobs for the new root so missing cache entries
+        // settle; without this, zooming into a cold subtree would stay
+        // pending forever.
+        self.spawn_columns_size_jobs();
+    }
+
+    /// Zoom out by one level: the current `columns_root`'s parent
+    /// becomes the root. No-op at the filesystem root.
+    fn column_zoom_out(&mut self) {
+        if let Some(parent) = self.columns_root.parent() {
+            let parent = parent.to_path_buf();
+            self.set_columns_root(parent);
+        }
+    }
+
+    /// Schedule directory-size computation for every directory path
+    /// currently referenced by the columns-view cells, plus the root
+    /// itself. This is a superset of the normal `spawn_size_jobs`
+    /// visible-paths scope because column mode needs sizes for deep
+    /// descendants, not just direct children of `current`.
+    fn spawn_columns_size_jobs(&self) {
+        if self.view_mode != 2 {
+            return;
+        }
+        // Kick off a walk of the columns root; the shared cache will
+        // populate entries for every descendant directory encountered,
+        // which is exactly what the layout needs.
+        //
+        // The batched update callback routes through
+        // `apply_size_updates` as usual. We reuse the same scope-filter
+        // infrastructure but widen the set to include every directory
+        // currently referenced by a cell.
+        let generation = self.generation;
+        let ui = self.ui.clone();
+        let engine = self.size_engine.clone();
+
+        let mut visible: FxHashSet<PathBuf> = FxHashSet::default();
+        // The root itself settles at the top of the walk; pick it up.
+        visible.insert(self.columns_root.clone());
+        if let Ok(canon) = std::fs::canonicalize(&self.columns_root) {
+            visible.insert(canon);
+        }
+        // Every directory path referenced by a currently-laid cell.
+        for i in 0..self.columns_model.row_count() {
+            if let Some(cell) = self.columns_model.row_data(i) {
+                if cell.is_dir {
+                    let p = PathBuf::from(cell.path.as_str());
+                    visible.insert(p.clone());
+                    if let Ok(canon) = std::fs::canonicalize(&p) {
+                        visible.insert(canon);
+                    }
+                }
+            }
+        }
+        let visible = Arc::new(visible);
+
+        let pending: Arc<Mutex<Vec<(PathBuf, SizeState)>>> =
+            Arc::new(Mutex::new(Vec::new()));
+        let has_pending = Arc::new(AtomicBool::new(false));
+
+        let ui_for_cb = ui.clone();
+        let visible_cb = visible.clone();
+        let pending_cb = pending.clone();
+        let has_pending_cb = has_pending.clone();
+        let on_progress: crate::dir_size::ProgressFn =
+            Box::new(move |path: &Path, state: SizeState| {
+                if !visible_cb.contains(path) {
+                    return;
+                }
+                {
+                    let mut buf = match pending_cb.lock() {
+                        Ok(g) => g,
+                        Err(poisoned) => poisoned.into_inner(),
+                    };
+                    buf.push((path.to_path_buf(), state));
+                }
+                if has_pending_cb
+                    .compare_exchange(
+                        false,
+                        true,
+                        Ordering::AcqRel,
+                        Ordering::Acquire,
+                    )
+                    .is_ok()
+                {
+                    let pending_cb2 = pending_cb.clone();
+                    let has_pending_cb2 = has_pending_cb.clone();
+                    let _ = ui_for_cb.upgrade_in_event_loop(move |_ui| {
+                        has_pending_cb2.store(false, Ordering::Release);
+                        let drained: Vec<(PathBuf, SizeState)> = {
+                            let mut buf = match pending_cb2.lock() {
+                                Ok(g) => g,
+                                Err(poisoned) => poisoned.into_inner(),
+                            };
+                            std::mem::take(&mut *buf)
+                        };
+                        APP_TLS.with(|slot| {
+                            let Some(weak) = slot.borrow().clone() else {
+                                return;
+                            };
+                            let Some(app) = weak.upgrade() else { return };
+                            if let Ok(mut app) = app.try_borrow_mut() {
+                                app.apply_size_updates(generation, drained);
+                            }
+                        });
+                    });
+                }
+            });
+        engine.compute(self.columns_root.clone(), generation, on_progress);
     }
 
     /// Queue a recursive-size computation for every directory in the current
@@ -416,6 +572,11 @@ impl App {
         // Refresh just the status string here so totals converge once all
         // pending sizes arrive, without rebuilding crumbs/tiles/sidebar.
         self.refresh_status_text();
+        if self.view_mode == 2 {
+            // Any size update can change a cell's area (or materialize
+            // a previously-pending cell). Re-run the layout.
+            self.recompute_columns();
+        }
     }
 
     /// Slim variant of [`App::push_ui_state`] that only replaces the items
@@ -959,6 +1120,16 @@ impl App {
             ui.set_view_mode(mode);
             // re-push to recompute grid rows for new mode width assumptions
         }
+        if mode == 2 {
+            // First time entering column view: seed the root from the
+            // currently-viewed directory. Subsequent zoom-in/out calls
+            // mutate `columns_root` directly without resetting it.
+            if self.columns_root != self.current {
+                self.columns_root = self.current.clone();
+            }
+            self.recompute_columns();
+            self.spawn_columns_size_jobs();
+        }
         self.persist();
     }
 
@@ -1083,20 +1254,23 @@ fn sort_col_to_config(c: SortCol) -> config::SortCol {
     }
 }
 
-/// Map the on-disk `config::ViewMode` into the UI integer (0 = list, 1 = grid).
+/// Map the on-disk `config::ViewMode` into the UI integer (0 = list, 1 = grid,
+/// 2 = columns).
 fn view_mode_from_config(v: config::ViewMode) -> i32 {
     match v {
         config::ViewMode::List => 0,
         config::ViewMode::Grid => 1,
+        config::ViewMode::Columns => 2,
     }
 }
 
-/// Map the UI integer (0 = list, anything else = grid) back to `config::ViewMode`.
+/// Map the UI integer back to `config::ViewMode`. Unknown integers fall
+/// back to `List` so a corrupt/partial state never surfaces as a panic.
 fn view_mode_to_config(m: i32) -> config::ViewMode {
-    if m == 1 {
-        config::ViewMode::Grid
-    } else {
-        config::ViewMode::List
+    match m {
+        1 => config::ViewMode::Grid,
+        2 => config::ViewMode::Columns,
+        _ => config::ViewMode::List,
     }
 }
 
@@ -1106,6 +1280,23 @@ fn view_mode_to_config(m: i32) -> config::ViewMode {
 fn format_total(bytes: u64, pending: bool) -> String {
     let base = format_size(bytes, BINARY);
     if pending { format!("{}+", base) } else { base }
+}
+
+/// Convert a `columns::LaidCell` into the Slint-facing `ColumnCell`
+/// struct. Mostly a mechanical mapping; `y-start`/`y-end` are logical
+/// pixels so they flow into Slint's `length` unit directly.
+fn laid_cell_to_ui(c: &LaidCell) -> ColumnCell {
+    ColumnCell {
+        name: c.name.clone().into(),
+        size_text: c.size_text.clone().into(),
+        col: c.col as i32,
+        y_start: c.y_start,
+        y_end: c.y_end,
+        is_dir: c.is_dir,
+        pending: c.pending,
+        path: c.path.to_string_lossy().to_string().into(),
+        is_root: c.is_root,
+    }
 }
 
 #[cfg(test)]
@@ -1125,14 +1316,20 @@ mod tests {
 
     #[test]
     fn view_mode_round_trip() {
-        for v in [config::ViewMode::List, config::ViewMode::Grid] {
+        for v in [
+            config::ViewMode::List,
+            config::ViewMode::Grid,
+            config::ViewMode::Columns,
+        ] {
             assert_eq!(view_mode_to_config(view_mode_from_config(v)), v);
         }
-        // Integer side: 0 is List, 1 is Grid; anything outside that range
-        // clamps to List. We match `ui/main.slint` where `view-mode` is an
-        // int with 0 = list, 1 = grid.
+        // Integer side: 0 is List, 1 is Grid, 2 is Columns; anything
+        // outside that range clamps to List. We match `ui/main.slint`
+        // where `view-mode` is an int with 0 = list, 1 = grid, 2 =
+        // columns.
         assert_eq!(view_mode_to_config(0), config::ViewMode::List);
         assert_eq!(view_mode_to_config(1), config::ViewMode::Grid);
+        assert_eq!(view_mode_to_config(2), config::ViewMode::Columns);
         assert_eq!(view_mode_to_config(-1), config::ViewMode::List);
         assert_eq!(view_mode_to_config(99), config::ViewMode::List);
     }
@@ -1469,6 +1666,38 @@ fn wire_callbacks(ui: &MainWindow, app: Rc<RefCell<App>>) {
     {
         let app = app.clone();
         ui.on_key_pressed(move |text| app.borrow_mut().handle_key(text));
+    }
+    {
+        let app = app.clone();
+        ui.on_columns_cell_clicked(move |path, is_dir, is_root| {
+            let mut a = app.borrow_mut();
+            let path = PathBuf::from(path.as_str());
+            if is_root {
+                a.column_zoom_out();
+            } else if is_dir {
+                a.set_columns_root(path);
+            } else {
+                // Files are clickable, but for now we only log the
+                // click. A future preview pane would hook in here.
+                log::debug!("columns-view: file clicked {}", path.display());
+            }
+        });
+    }
+    {
+        let app = app.clone();
+        ui.on_columns_view_height_changed(move |h| {
+            let mut a = app.borrow_mut();
+            let new_h = h as f32;
+            // Slint fires `changed` on every frame the value differs;
+            // ignore sub-pixel noise so we don't spam `recompute_columns`.
+            if (new_h - a.columns_view_height).abs() < 0.5 {
+                return;
+            }
+            a.columns_view_height = new_h;
+            if a.view_mode == 2 {
+                a.recompute_columns();
+            }
+        });
     }
 }
 

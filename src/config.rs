@@ -20,6 +20,7 @@ pub struct Config {
 pub enum ViewMode {
     List,
     Grid,
+    Columns,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
@@ -168,6 +169,25 @@ mod tests {
         let mut expected = Config::default();
         expected.view_mode = ViewMode::Grid;
         assert_eq!(cfg, expected);
+    }
+
+    /// Regression guard: pre-Columns configs that name only `"List"` or
+    /// `"Grid"` must still deserialize correctly after the `Columns`
+    /// variant was added.
+    #[test]
+    fn legacy_view_mode_values_still_deserialize() {
+        let dir = TempDir::new().unwrap();
+        let path = cfg_path(&dir);
+        fs::create_dir_all(path.parent().unwrap()).unwrap();
+
+        fs::write(&path, br#"{"view_mode":"Grid"}"#).unwrap();
+        assert_eq!(load_from(&path).view_mode, ViewMode::Grid);
+
+        fs::write(&path, br#"{"view_mode":"List"}"#).unwrap();
+        assert_eq!(load_from(&path).view_mode, ViewMode::List);
+
+        fs::write(&path, br#"{"view_mode":"Columns"}"#).unwrap();
+        assert_eq!(load_from(&path).view_mode, ViewMode::Columns);
     }
 
     #[test]
