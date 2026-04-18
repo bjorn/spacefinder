@@ -16,8 +16,6 @@ export component ColumnsView inherits Rectangle {
     in property <[ColumnCell]> cells;
     in property <int> visible-columns: 5;
     callback cell-clicked(string, bool, bool);
-    callback view-height-changed(length);
-    callback view-width-changed(length);
 
     background: Theme.bg;
 
@@ -26,48 +24,49 @@ export component ColumnsView inherits Rectangle {
     // Total padding to subtract from the available width.
     property <length> content-w: max(0px, self.width - 2 * root.h-pad);
     property <length> col-w: (root.content-w - (root.visible-columns - 1) * root.col-spacing) / root.visible-columns;
-    property <length> content-h: max(0px, self.height - 2 * root.h-pad);
 
-    // Publish size changes to Rust so the layout can be recomputed against
-    // the new view bounds.
-    changed content-h => { root.view-height-changed(self.content-h); }
-    changed content-w => { root.view-width-changed(self.content-w); }
+    // Inner Rectangle wraps the absolutely-positioned children so they
+    // cannot feed back into the root's intrinsic-size inference during
+    // the first binding pass. Its explicit width/height make it the
+    // coordinate system the cells live inside.
+    Rectangle {
+        width: parent.width;
+        height: parent.height;
 
-    // Background click catcher has no useful action here; omit.
+        for cell in root.cells : Rectangle {
+            x: root.h-pad + cell.col * (root.col-w + root.col-spacing);
+            y: root.h-pad + cell.y-start;
+            width: root.col-w;
+            height: max(0px, cell.y-end - cell.y-start);
+            border-width: 1px;
+            border-color: Theme.divider;
+            border-radius: 2px;
+            background: touch.pressed
+                ? Theme.bg-pressed
+                : touch.has-hover
+                    ? Theme.bg-hover
+                    : cell.is-dir ? Theme.bg-elevated : Theme.bg-component;
+            clip: true;
 
-    for cell in root.cells : Rectangle {
-        x: root.h-pad + cell.col * (root.col-w + root.col-spacing);
-        y: root.h-pad + cell.y-start;
-        width: root.col-w;
-        height: max(0px, cell.y-end - cell.y-start);
-        border-width: 1px;
-        border-color: Theme.divider;
-        border-radius: 2px;
-        background: touch.pressed
-            ? Theme.bg-pressed
-            : touch.has-hover
-                ? Theme.bg-hover
-                : cell.is-dir ? Theme.bg-elevated : Theme.bg-component;
-        clip: true;
+            Text {
+                x: 4px;
+                y: 2px;
+                width: parent.width - 8px;
+                height: parent.height - 4px;
+                text: cell.name + (cell.size-text != "" ? "  " + cell.size-text : "");
+                color: cell.pending ? Theme.text-subtle : Theme.text;
+                font-size: 11px;
+                font-weight: cell.is-dir ? 600 : 400;
+                overflow: elide;
+                wrap: no-wrap;
+                vertical-alignment: top;
+            }
 
-        Text {
-            x: 4px;
-            y: 2px;
-            width: parent.width - 8px;
-            height: parent.height - 4px;
-            text: cell.name + (cell.size-text != "" ? "  " + cell.size-text : "");
-            color: cell.pending ? Theme.text-subtle : Theme.text;
-            font-size: 11px;
-            font-weight: cell.is-dir ? 600 : 400;
-            overflow: elide;
-            wrap: no-wrap;
-            vertical-alignment: top;
-        }
-
-        touch := TouchArea {
-            mouse-cursor: pointer;
-            clicked => {
-                root.cell-clicked(cell.path, cell.is-dir, cell.is-root);
+            touch := TouchArea {
+                mouse-cursor: pointer;
+                clicked => {
+                    root.cell-clicked(cell.path, cell.is-dir, cell.is-root);
+                }
             }
         }
     }

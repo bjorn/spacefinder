@@ -286,13 +286,37 @@ impl App {
     /// at most [`columns::VISIBLE_COLUMNS`] levels and skips cells
     /// thinner than one logical pixel, so the total cell count stays
     /// bounded by the view height regardless of tree size.
+    ///
+    /// The view height is queried from the live `Window` each time rather
+    /// than being pushed from a Slint `changed` handler. That keeps the
+    /// Slint side free of reactive callbacks that fed back into the same
+    /// bindings during init (which tripped the binding-loop detector).
+    /// The tradeoff: cells only re-layout on click/size-batch events,
+    /// not live during drag-resize.
     fn recompute_columns(&self) {
-        let laid = columns::lay_out(&self.columns_root, self.columns_view_height);
+        let h = self.current_view_height();
+        let laid = columns::lay_out(&self.columns_root, h);
         let cells: Vec<ColumnCell> = laid
             .into_iter()
             .map(|c| laid_cell_to_ui(&c))
             .collect();
         self.columns_model.set_vec(cells);
+    }
+
+    /// Best-effort query of the current column-view height in logical px.
+    /// Falls back to the last-seen cached value when the window isn't up
+    /// yet. The returned value is also written back to
+    /// `columns_view_height` so subsequent calls without a live window
+    /// still return a sensible number.
+    fn current_view_height(&self) -> f32 {
+        if let Some(ui) = self.ui.upgrade() {
+            let size = ui.window().size();
+            let scale = ui.window().scale_factor();
+            if scale > 0.0 && size.height > 0 {
+                return (size.height as f32 / scale).max(0.0);
+            }
+        }
+        self.columns_view_height
     }
 
     /// Set the columns view's root and trigger a re-layout. Used by
@@ -1680,22 +1704,6 @@ fn wire_callbacks(ui: &MainWindow, app: Rc<RefCell<App>>) {
                 // Files are clickable, but for now we only log the
                 // click. A future preview pane would hook in here.
                 log::debug!("columns-view: file clicked {}", path.display());
-            }
-        });
-    }
-    {
-        let app = app.clone();
-        ui.on_columns_view_height_changed(move |h| {
-            let mut a = app.borrow_mut();
-            let new_h = h as f32;
-            // Slint fires `changed` on every frame the value differs;
-            // ignore sub-pixel noise so we don't spam `recompute_columns`.
-            if (new_h - a.columns_view_height).abs() < 0.5 {
-                return;
-            }
-            a.columns_view_height = new_h;
-            if a.view_mode == 2 {
-                a.recompute_columns();
             }
         });
     }

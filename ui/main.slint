@@ -80,7 +80,6 @@ export component MainWindow inherits Window {
 
     // Columns view events.
     callback columns-cell-clicked(string, bool, bool);
-    callback columns-view-height-changed(length);
 
     callback key-pressed(string) -> bool;
 
@@ -167,9 +166,6 @@ export component MainWindow inherits Window {
                         cells: root.column-cells;
                         cell-clicked(path, is-dir, is-root) => {
                             root.columns-cell-clicked(path, is-dir, is-root);
-                        }
-                        view-height-changed(h) => {
-                            root.columns-view-height-changed(h);
                         }
                     }
 
