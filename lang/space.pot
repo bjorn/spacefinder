@@ -246,3 +246,8 @@ msgstr[1] ""
 msgctxt "Rust"
 msgid "{} of {} selected, {} of {}"
 msgstr ""
+
+#: src/controller.rs
+msgctxt "Rust"
+msgid "{} free of {}"
+msgstr ""

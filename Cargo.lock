@@ -4777,6 +4777,7 @@ dependencies = [
  "freedesktop-icons",
  "humansize",
  "jwalk",
+ "libc",
  "log",
  "mime_guess",
  "open",

@@ -3,6 +3,7 @@ slint::include_modules!();
 mod config;
 mod controller;
 mod dir_size;
+mod disk;
 mod fs_scan;
 mod i18n;
 mod icons;

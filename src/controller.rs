@@ -1,5 +1,6 @@
 use crate::config::{self, Config};
 use crate::dir_size::SizeEngine;
+use crate::disk;
 use crate::fs_scan::{self, Entry, SizeState, SortCol};
 use crate::i18n::{tr, tr_fmt, tr_n_fmt};
 use crate::icons::Icons;
@@ -541,6 +542,7 @@ impl App {
         ui.set_sort_asc(self.sort_asc);
 
         ui.set_status_text(self.compute_status_text().into());
+        ui.set_device_text(self.compute_device_text().into());
     }
 
     /// Rebuild just the status-bar string from current state and push it to
@@ -551,6 +553,23 @@ impl App {
     fn refresh_status_text(&self) {
         let Some(ui) = self.ui.upgrade() else { return };
         ui.set_status_text(self.compute_status_text().into());
+        ui.set_device_text(self.compute_device_text().into());
+    }
+
+    /// Build the right-aligned "N free of M" segment for the status bar.
+    ///
+    /// Calls `statvfs` synchronously. Single syscall, sub-millisecond on
+    /// local mounts. We accept that this can block on an unresponsive NFS
+    /// mount as a known tradeoff, since navigation already blocks on scan()
+    /// anyway. On any failure (statvfs error, weird path) we return an empty
+    /// string; the UI simply shows nothing on the right.
+    fn compute_device_text(&self) -> String {
+        let Some((avail, total)) = disk::free_and_total(&self.current) else {
+            return String::new();
+        };
+        let avail_s = format_size(avail, BINARY);
+        let total_s = format_size(total, BINARY);
+        tr_fmt("{} free of {}", &[&avail_s, &total_s])
     }
 
     /// Compute the status-bar string from the current filtered entries and

@@ -31,6 +31,7 @@ export component MainWindow inherits Window {
     in property <int> sort-col: 0;
     in property <bool> sort-asc: true;
     in property <string> status-text;
+    in property <string> device-text;
 
     // Context menu state
     in property <[MenuEntry]> context-entries;
@@ -160,12 +161,21 @@ export component MainWindow inherits Window {
                         height: 22px;
                         background: Theme.bg-component;
                         HorizontalLayout {
-                            padding-left: 12px; padding-right: 12px;
+                            padding-left: 12px;
+                            padding-right: 12px;
                             Text {
                                 text: root.status-text;
                                 color: Theme.text-muted;
                                 font-size: 12px;
                                 vertical-alignment: center;
+                                horizontal-stretch: 1;
+                            }
+                            Text {
+                                text: root.device-text;
+                                color: Theme.text-muted;
+                                font-size: 12px;
+                                vertical-alignment: center;
+                                horizontal-alignment: right;
                             }
                         }
                     }
