@@ -394,12 +394,50 @@ impl App {
         for (path, state) in updates {
             self.on_size_update_inner(&path, state);
         }
+        // When sorting by size, the per-row `set_row_data` calls above only
+        // update the size *text* on existing rows; they do not reorder the
+        // list, so the view stays pinned to the pre-settle (all-zero) order.
+        // Re-run the filter+sort pass now that authoritative sizes are in,
+        // then rebuild just the items model from the new `filtered` ordering.
+        //
+        // This is cheap: the size-update callbacks are already coalesced into
+        // batches throttled to a handful per second by `spawn_size_jobs`, so
+        // at worst we re-sort a few-hundred-entry list a few times a second.
+        // For non-size sort columns the order cannot have changed, so we
+        // skip this path and only refresh the status text below.
+        if matches!(self.sort_col, SortCol::Size) {
+            self.rebuild_view();
+            self.push_items_model();
+        }
         // The batched drain path bypasses `push_ui_state`, so the status bar
         // would otherwise stay stuck on whatever value was computed at
         // navigation time (typically a lower bound with a trailing `+`).
         // Refresh just the status string here so totals converge once all
         // pending sizes arrive, without rebuilding crumbs/tiles/sidebar.
         self.refresh_status_text();
+    }
+
+    /// Slim variant of [`App::push_ui_state`] that only replaces the items
+    /// model contents. Used by the size-update drain when re-sorting after a
+    /// batch: the crumbs, sidebar, view-mode, and sort indicators are all
+    /// unchanged, so rebuilding them would be wasted work and would defeat
+    /// the responsiveness batching.
+    fn push_items_model(&self) {
+        let mut items: Vec<FileItem> = Vec::with_capacity(self.filtered.len());
+        for (display_idx, &eidx) in self.filtered.iter().enumerate() {
+            let e = &self.entries[eidx];
+            items.push(FileItem {
+                name: e.name.clone().into(),
+                icon: self.icons.for_path(&e.path, e.is_dir),
+                is_dir: e.is_dir,
+                size_text: e.size_text().into(),
+                modified_text: e.modified_text().into(),
+                selected: self.selection.contains(&display_idx),
+                cut: self.cut_paths.contains(&e.path),
+                hidden: e.hidden,
+            });
+        }
+        self.items_model.set_vec(items);
     }
 
     fn on_size_update_inner(&mut self, path: &Path, state: SizeState) {
@@ -439,28 +477,15 @@ impl App {
             .map(|(i, _)| i)
             .collect();
 
-        // Sort. We sort directly on the indices.
-        let sort_col = self.sort_col;
-        let sort_asc = self.sort_asc;
-        let folders_first = self.folders_first;
-        let entries = &self.entries;
-        self.filtered.sort_by(|a, b| {
-            let ea = &entries[*a];
-            let eb = &entries[*b];
-            if folders_first && ea.is_dir != eb.is_dir {
-                return if ea.is_dir {
-                    std::cmp::Ordering::Less
-                } else {
-                    std::cmp::Ordering::Greater
-                };
-            }
-            let ord = match sort_col {
-                SortCol::Name => lexical(&ea.name, &eb.name),
-                SortCol::Modified => ea.modified.cmp(&eb.modified),
-                SortCol::Size => ea.effective_size().cmp(&eb.effective_size()),
-            };
-            if sort_asc { ord } else { ord.reverse() }
-        });
+        // Sort. Delegated to the pure `sort_indices` helper so the ordering
+        // rule is unit-testable without a live window.
+        self.filtered = sort_indices(
+            &self.entries,
+            &self.filtered,
+            self.sort_col,
+            self.sort_asc,
+            self.folders_first,
+        );
 
         // Clamp selection.
         let max = self.filtered.len();
@@ -950,6 +975,77 @@ fn lexical(a: &str, b: &str) -> std::cmp::Ordering {
     a.to_lowercase().cmp(&b.to_lowercase())
 }
 
+/// Pure sort step used by `App::rebuild_view`. Takes a slice of `Entry` and a
+/// pre-filtered set of indices into it, returns those indices reordered
+/// according to the requested column and direction.
+///
+/// Split out of the method body so the ordering rule can be unit-tested
+/// without a live Slint window. The method just wires up its own state and
+/// calls this.
+///
+/// # Size sort and unknown sizes
+///
+/// The tricky case is `SortCol::Size` on a cold directory: background size
+/// walkers populate `Entry::size_state` asynchronously, so at first paint
+/// every directory is `Calculating` with `effective_size() == 0`. Comparing
+/// those zeros gives read-directory order, which looks unsorted to the user.
+/// We treat `Calculating` and `Unknown` as "smaller than anything known" so
+/// unknowns consistently cluster at one end (bottom under descending, top
+/// under ascending), and fall back to alphabetical on ties so the pre-settle
+/// order at least reads top-to-bottom alphabetically rather than randomly.
+pub fn sort_indices(
+    entries: &[Entry],
+    filtered: &[usize],
+    sort_col: SortCol,
+    sort_asc: bool,
+    folders_first: bool,
+) -> Vec<usize> {
+    let mut out: Vec<usize> = filtered.to_vec();
+    out.sort_by(|a, b| {
+        let ea = &entries[*a];
+        let eb = &entries[*b];
+        if folders_first && ea.is_dir != eb.is_dir {
+            return if ea.is_dir {
+                std::cmp::Ordering::Less
+            } else {
+                std::cmp::Ordering::Greater
+            };
+        }
+        let ord = match sort_col {
+            SortCol::Name => lexical(&ea.name, &eb.name),
+            SortCol::Modified => ea.modified.cmp(&eb.modified),
+            SortCol::Size => size_cmp(ea, eb),
+        };
+        if sort_asc { ord } else { ord.reverse() }
+    });
+    out
+}
+
+/// Compare two entries by size for `SortCol::Size`. Known sizes compare by
+/// their numeric value. `Calculating` and `Unknown` are treated as strictly
+/// smaller than any `Known` value, and equal to each other; ties (including
+/// two unknowns) fall back to lexical name order.
+///
+/// The same rule is applied before the caller's optional `reverse()` so the
+/// alphabetical fallback is consistent regardless of `sort_asc`. The direction
+/// flip is applied by the caller.
+fn size_cmp(ea: &Entry, eb: &Entry) -> std::cmp::Ordering {
+    use std::cmp::Ordering;
+    let a_known = matches!(ea.size_state, SizeState::Known(_));
+    let b_known = matches!(eb.size_state, SizeState::Known(_));
+    let ord = match (a_known, b_known) {
+        (true, true) => ea.effective_size().cmp(&eb.effective_size()),
+        (true, false) => Ordering::Greater, // known > unknown
+        (false, true) => Ordering::Less,    // unknown < known
+        (false, false) => Ordering::Equal,
+    };
+    if ord == Ordering::Equal {
+        lexical(&ea.name, &eb.name)
+    } else {
+        ord
+    }
+}
+
 /// Map the on-disk `config::SortCol` into the runtime `fs_scan::SortCol`.
 fn sort_col_from_config(c: config::SortCol) -> SortCol {
     match c {
@@ -1030,6 +1126,79 @@ mod tests {
         assert!(cfg.sort_asc);
         assert!(!cfg.show_hidden);
         assert!(cfg.folders_first);
+    }
+
+    /// Build a synthetic entry for sort tests. Directories get a
+    /// `size_state` argument (since that is what the sort comparator actually
+    /// inspects for dirs), files are always `Known(size)`.
+    fn make_entry(name: &str, is_dir: bool, size: u64, state: SizeState) -> Entry {
+        Entry {
+            name: name.to_string(),
+            path: PathBuf::from(name),
+            is_dir,
+            size: if is_dir { 0 } else { size },
+            size_state: if is_dir { state } else { SizeState::Known(size) },
+            modified: std::time::SystemTime::UNIX_EPOCH,
+            hidden: false,
+        }
+    }
+
+    fn names(entries: &[Entry], order: &[usize]) -> Vec<String> {
+        order.iter().map(|&i| entries[i].name.clone()).collect()
+    }
+
+    /// Sort by Size, mixture of files and dirs with known and unknown sizes.
+    /// With folders_first and descending order, directories should precede
+    /// files, the known-size directory with the larger total comes first, and
+    /// the still-calculating directory sorts below the known one. Files
+    /// follow, descending by size.
+    #[test]
+    fn sort_indices_by_size_mixed_known_and_unknown() {
+        let entries = vec![
+            make_entry("zdir-unknown", true, 0, SizeState::Calculating),
+            make_entry("adir-big", true, 500, SizeState::Known(500)),
+            make_entry("bfile-small", false, 10, SizeState::Known(10)),
+            make_entry("cfile-big", false, 100, SizeState::Known(100)),
+            make_entry("adir-small", true, 50, SizeState::Known(50)),
+        ];
+        let filtered: Vec<usize> = (0..entries.len()).collect();
+
+        // Descending size, folders_first = true.
+        let out = sort_indices(&entries, &filtered, SortCol::Size, false, true);
+        let got = names(&entries, &out);
+        assert_eq!(
+            got,
+            vec![
+                "adir-big",      // 500, known, dir
+                "adir-small",    // 50, known, dir
+                "zdir-unknown",  // unknown, dir (sinks below known in desc)
+                "cfile-big",     // 100, file
+                "bfile-small",   // 10, file
+            ],
+        );
+    }
+
+    /// When two directories are both `Calculating`, they should fall back to
+    /// alphabetical order, regardless of `sort_asc`. This is the "readable
+    /// pre-settle order" the fix aims to provide.
+    #[test]
+    fn sort_indices_by_size_ties_on_unknown_are_alphabetical() {
+        let entries = vec![
+            make_entry("charlie", true, 0, SizeState::Calculating),
+            make_entry("alpha", true, 0, SizeState::Calculating),
+            make_entry("bravo", true, 0, SizeState::Calculating),
+        ];
+        let filtered: Vec<usize> = (0..entries.len()).collect();
+
+        // Ascending.
+        let asc = sort_indices(&entries, &filtered, SortCol::Size, true, true);
+        assert_eq!(names(&entries, &asc), vec!["alpha", "bravo", "charlie"]);
+
+        // Descending: alphabetical fallback applies before the reverse flip,
+        // so the on-screen order flips to z..a. This is expected and still
+        // readable.
+        let desc = sort_indices(&entries, &filtered, SortCol::Size, false, true);
+        assert_eq!(names(&entries, &desc), vec!["charlie", "bravo", "alpha"]);
     }
 }
 
