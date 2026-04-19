@@ -84,6 +84,11 @@ pub struct App {
     /// every [`App::recompute_columns`] rather than mutated row-by-row,
     /// because the layout is a single pass and the cell count varies.
     columns_model: Rc<VecModel<ColumnCell>>,
+    /// Rust-side copy of the currently-laid column cells. Kept in sync
+    /// with `columns_model` by `recompute_columns`. Used by
+    /// [`App::handle_key`] to implement arrow-key navigation without
+    /// reparsing paths back out of the Slint model.
+    column_cells: Vec<LaidCell>,
     /// Last-observed window size, in logical pixels. Refreshed on every
     /// `persist()` call so a final `on_close_requested` save catches the
     /// latest dimensions.
@@ -154,6 +159,7 @@ impl App {
             view_mode,
             column_selected_path: None,
             columns_model,
+            column_cells: Vec::new(),
             window_size: cfg.window_size,
             last_save: None,
             save_scheduled: Rc::new(Cell::new(false)),
@@ -316,14 +322,15 @@ impl App {
     /// not depend on the window size at all and the previous
     /// `changed content-h` callback is not needed, avoiding the binding
     /// loop it used to trip.
-    fn recompute_columns(&self) {
+    fn recompute_columns(&mut self) {
         let laid = columns::lay_out(&self.current, self.show_hidden);
         let selected = self.column_selected_path.as_deref();
         let cells: Vec<ColumnCell> = laid
-            .into_iter()
-            .map(|c| laid_cell_to_ui(&c, selected))
+            .iter()
+            .map(|c| laid_cell_to_ui(c, selected))
             .collect();
         self.columns_model.set_vec(cells);
+        self.column_cells = laid;
     }
 
     /// Schedule directory-size computation for every directory path
@@ -896,6 +903,7 @@ impl App {
         if idx >= self.filtered.len() {
             return;
         }
+        let prev = self.selection.clone();
         if shift {
             self.range_select(idx);
         } else if ctrl {
@@ -903,7 +911,31 @@ impl App {
         } else {
             self.select_only(idx);
         }
-        self.push_ui_state();
+        self.refresh_selection_display(&prev);
+    }
+
+    /// Update only the rows whose `selected` flag flipped between
+    /// `prev` and the current `self.selection`, plus the status-bar
+    /// text. Avoids the full `push_ui_state` rebuild so arrow-key
+    /// selection changes stay snappy on 500+ entry directories.
+    ///
+    /// The crumbs, sidebar-active-path, sort indicators, view mode and
+    /// clipboard-cut markers are all stable across a pure selection
+    /// change, so they are not touched here. If any of those shift
+    /// (navigation, sort change, paste, etc.) call `push_ui_state`.
+    fn refresh_selection_display(&self, prev: &FxHashSet<usize>) {
+        // Symmetric difference: rows that entered or left the set.
+        let affected: FxHashSet<usize> = prev
+            .symmetric_difference(&self.selection)
+            .copied()
+            .collect();
+        for i in affected {
+            if let Some(mut item) = self.items_model.row_data(i) {
+                item.selected = self.selection.contains(&i);
+                self.items_model.set_row_data(i, item);
+            }
+        }
+        self.refresh_status_text();
     }
 
     fn double_click(&mut self, idx: usize) {
@@ -1251,6 +1283,12 @@ impl App {
             return true;
         }
 
+        // Column view: separate navigation. Uses the `(col, y_start,
+        // y_end)` geometry from the cached layout rather than flat row
+        // indices.
+        if self.view_mode == 2 {
+            return self.handle_key_columns(t);
+        }
         // Arrow / Home / End / PageUp / PageDown move the focus row inside
         // the list or grid. Not handled in column view.
         if self.view_mode != 0 && self.view_mode != 1 {
@@ -1318,6 +1356,123 @@ impl App {
             }
             None => false,
         }
+    }
+
+    /// Arrow-key navigation inside the column (icicle) view. Uses the
+    /// cached `column_cells` layout: each cell carries a `col` and a
+    /// `[y_start, y_end]` fractional range, and moves are phrased in
+    /// those coordinates rather than flat row indices.
+    ///
+    /// If there is no current selection, the first arrow press selects
+    /// the root (col 0) cell. If the selected path no longer resolves
+    /// to a visible cell (e.g. after a re-layout), we also fall back to
+    /// the root.
+    fn handle_key_columns(&mut self, t: &str) -> bool {
+        let is_up = t == slint::SharedString::from(slint::platform::Key::UpArrow).as_str();
+        let is_down =
+            t == slint::SharedString::from(slint::platform::Key::DownArrow).as_str();
+        let is_left =
+            t == slint::SharedString::from(slint::platform::Key::LeftArrow).as_str();
+        let is_right =
+            t == slint::SharedString::from(slint::platform::Key::RightArrow).as_str();
+        if !(is_up || is_down || is_left || is_right) {
+            return false;
+        }
+        if self.column_cells.is_empty() {
+            return false;
+        }
+
+        // Locate the currently-selected cell. Missing selection or
+        // stale path both fall back to the root (col 0).
+        let cur_idx: Option<usize> = self.column_selected_path.as_ref().and_then(|p| {
+            self.column_cells
+                .iter()
+                .position(|c| c.path.as_path() == p.as_path())
+        });
+        let cur_idx = match cur_idx {
+            Some(i) => i,
+            None => {
+                // Seed to root and stop; one press = "start here".
+                let root = &self.column_cells[0];
+                self.column_selected_path = Some(root.path.clone());
+                self.recompute_columns();
+                return true;
+            }
+        };
+
+        let cur = &self.column_cells[cur_idx];
+        let cur_col = cur.col;
+        let cur_y_start = cur.y_start;
+        let cur_y_end = cur.y_end;
+        let cur_mid = (cur_y_start + cur_y_end) * 0.5;
+
+        // Small epsilon to tolerate float equality on boundary matches.
+        const EPS: f32 = 1e-4;
+
+        let target: Option<usize> = if is_down {
+            // Smallest y_start in the same column that is >= cur_y_end.
+            self.column_cells
+                .iter()
+                .enumerate()
+                .filter(|(_, c)| c.col == cur_col && c.y_start + EPS >= cur_y_end)
+                .min_by(|(_, a), (_, b)| {
+                    a.y_start.partial_cmp(&b.y_start).unwrap_or(std::cmp::Ordering::Equal)
+                })
+                .map(|(i, _)| i)
+        } else if is_up {
+            // Largest y_end in the same column that is <= cur_y_start.
+            self.column_cells
+                .iter()
+                .enumerate()
+                .filter(|(_, c)| c.col == cur_col && c.y_end <= cur_y_start + EPS)
+                .max_by(|(_, a), (_, b)| {
+                    a.y_end.partial_cmp(&b.y_end).unwrap_or(std::cmp::Ordering::Equal)
+                })
+                .map(|(i, _)| i)
+        } else if is_left {
+            if cur_col == 0 {
+                None
+            } else {
+                let parent_col = cur_col - 1;
+                self.column_cells
+                    .iter()
+                    .enumerate()
+                    .find(|(_, c)| {
+                        c.col == parent_col
+                            && c.y_start - EPS <= cur_mid
+                            && cur_mid <= c.y_end + EPS
+                    })
+                    .map(|(i, _)| i)
+            }
+        } else {
+            // is_right: first cell in `cur_col + 1` whose y_start >=
+            // cur_y_start and which falls inside `[cur_y_start,
+            // cur_y_end]`.
+            let next_col = cur_col + 1;
+            self.column_cells
+                .iter()
+                .enumerate()
+                .filter(|(_, c)| {
+                    c.col == next_col
+                        && c.y_start + EPS >= cur_y_start
+                        && c.y_start <= cur_y_end + EPS
+                })
+                .min_by(|(_, a), (_, b)| {
+                    a.y_start.partial_cmp(&b.y_start).unwrap_or(std::cmp::Ordering::Equal)
+                })
+                .map(|(i, _)| i)
+        };
+
+        if let Some(i) = target {
+            let new_path = self.column_cells[i].path.clone();
+            if self.column_selected_path.as_deref() != Some(new_path.as_path()) {
+                self.column_selected_path = Some(new_path);
+                self.recompute_columns();
+            }
+        }
+        // Consume the key either way so the list/grid fallthrough does
+        // not interpret it.
+        true
     }
 }
 
@@ -1718,8 +1873,9 @@ fn wire_callbacks(ui: &MainWindow, app: Rc<RefCell<App>>) {
             let mut a = app.borrow_mut();
             let idx = idx as usize;
             if !a.selection.contains(&idx) {
+                let prev = a.selection.clone();
                 a.select_only(idx);
-                a.push_ui_state();
+                a.refresh_selection_display(&prev);
             }
             drop(a);
             show_context_menu(&app, x, y, /* on_item */ true);
@@ -1735,9 +1891,10 @@ fn wire_callbacks(ui: &MainWindow, app: Rc<RefCell<App>>) {
         let app = app.clone();
         ui.on_background_clicked(move || {
             let mut a = app.borrow_mut();
+            let prev = a.selection.clone();
             a.selection.clear();
             a.last_clicked = None;
-            a.push_ui_state();
+            a.refresh_selection_display(&prev);
         });
     }
     {
