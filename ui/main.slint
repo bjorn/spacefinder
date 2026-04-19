@@ -87,7 +87,12 @@ export component MainWindow inherits Window {
     // `item-right-clicked` callback which uses an index into `items`.
     callback item-path-right-clicked(string, length, length);
 
-    callback key-pressed(string) -> bool;
+    callback key-pressed(string, bool) -> bool;
+
+    // Live column count for the grid view, forwarded up from FileGridView
+    // when the grid is active. Read by Rust in handle_key to compute
+    // vertical-step for arrow navigation.
+    out property <int> grid-cols: 1;
 
     forward-focus: focus-scope;
     focus-scope := FocusScope {
@@ -97,7 +102,7 @@ export component MainWindow inherits Window {
                 root.context-visible = false;
                 return accept;
             }
-            if (root.key-pressed(e.text)) {
+            if (root.key-pressed(e.text, e.modifiers.shift)) {
                 return accept;
             }
             reject
@@ -154,8 +159,12 @@ export component MainWindow inherits Window {
                         rename-submitted(i, n) => { root.rename-submitted(i, n); }
                         rename-cancelled => { root.rename-cancelled(); }
                     }
-                    if root.view-mode == 1 : FileGridView {
+                    if root.view-mode == 1 : grid := FileGridView {
                         items: root.items;
+                        // Forward the live column count up to the window so
+                        // Rust can read it for keyboard arrow navigation.
+                        init => { root.grid-cols = self.cols; }
+                        changed cols => { root.grid-cols = self.cols; }
                         item-clicked(i, c, s) => { root.item-clicked(i, c, s); }
                         item-double-clicked(i) => { root.item-double-clicked(i); }
                         item-right-clicked(i, x, y) => {

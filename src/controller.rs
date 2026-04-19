@@ -95,6 +95,12 @@ pub struct App {
     /// stacking more than one pending save while the user mashes through
     /// state changes.
     save_scheduled: Rc<Cell<bool>>,
+    /// When `go_up` fires, the name of the directory we just left. After
+    /// the parent's listing is rebuilt, `refresh` consults this and sets
+    /// the selection to the matching entry so the child the user came
+    /// from stays highlighted (and is the anchor for subsequent arrow-
+    /// key moves). Cleared after one use.
+    select_after_navigate: Option<String>,
 }
 
 #[derive(Copy, Clone)]
@@ -151,6 +157,7 @@ impl App {
             window_size: cfg.window_size,
             last_save: None,
             save_scheduled: Rc::new(Cell::new(false)),
+            select_after_navigate: None,
         }));
 
         // Stash a weak handle for background workers to reach back through.
@@ -275,6 +282,20 @@ impl App {
             self.entries.len()
         );
         self.rebuild_view();
+        // If a preceding `go_up` requested it, re-select the child
+        // directory we just left so it stays highlighted (and becomes
+        // the keyboard-focus anchor). One-shot.
+        if let Some(name) = self.select_after_navigate.take() {
+            if let Some(idx) = self
+                .filtered
+                .iter()
+                .position(|&eidx| self.entries[eidx].name == name)
+            {
+                self.selection.clear();
+                self.selection.insert(idx);
+                self.last_clicked = Some(idx);
+            }
+        }
         self.push_ui_state();
         self.spawn_size_jobs();
         if self.view_mode == 2 {
@@ -834,6 +855,12 @@ impl App {
 
     fn go_up(&mut self) {
         if let Some(parent) = self.current.parent() {
+            // Capture the directory name we are leaving so `refresh`
+            // can highlight it in the parent listing once loaded.
+            self.select_after_navigate = self
+                .current
+                .file_name()
+                .map(|n| n.to_string_lossy().to_string());
             // `navigate` already calls `persist`, no need to double-save.
             self.navigate(parent.to_path_buf());
         }
@@ -1199,30 +1226,97 @@ impl App {
         self.persist();
     }
 
-    fn handle_key(&mut self, text: SharedString) -> bool {
+    fn handle_key(&mut self, text: SharedString, shift: bool) -> bool {
         let t = text.as_str();
-        match t {
-            k if k == slint::SharedString::from(slint::platform::Key::Backspace).as_str() => {
-                self.go_up();
+        // Non-navigation shortcuts first: these are independent of the
+        // current focus index.
+        if t == slint::SharedString::from(slint::platform::Key::Backspace).as_str() {
+            self.go_up();
+            return true;
+        }
+        if t == slint::SharedString::from(slint::platform::Key::Delete).as_str() {
+            self.ctx_delete_to_trash();
+            return true;
+        }
+        if t == slint::SharedString::from(slint::platform::Key::F2).as_str() {
+            self.ctx_rename();
+            return true;
+        }
+        if t == slint::SharedString::from(slint::platform::Key::F5).as_str() {
+            self.refresh();
+            return true;
+        }
+        if t == slint::SharedString::from(slint::platform::Key::Return).as_str() {
+            self.ctx_open();
+            return true;
+        }
+
+        // Arrow / Home / End / PageUp / PageDown move the focus row inside
+        // the list or grid. Not handled in column view.
+        if self.view_mode != 0 && self.view_mode != 1 {
+            return false;
+        }
+        let n = self.filtered.len();
+        if n == 0 {
+            return false;
+        }
+        // Current focus: prefer the explicit anchor, fall back to first
+        // selected, else to 0.
+        let cur = self
+            .last_clicked
+            .or_else(|| self.selection.iter().copied().min())
+            .unwrap_or(0)
+            .min(n - 1);
+
+        // Grid column count: 1 in list view, live value in grid view.
+        let cols = if self.view_mode == 1 {
+            self.ui
+                .upgrade()
+                .map(|ui| ui.get_grid_cols().max(1) as usize)
+                .unwrap_or(1)
+        } else {
+            1
+        };
+
+        let new_idx: Option<usize> =
+            if t == slint::SharedString::from(slint::platform::Key::UpArrow).as_str() {
+                let step = cols;
+                if cur >= step { Some(cur - step) } else { Some(0) }
+            } else if t == slint::SharedString::from(slint::platform::Key::DownArrow).as_str() {
+                Some((cur + cols).min(n - 1))
+            } else if t == slint::SharedString::from(slint::platform::Key::LeftArrow).as_str() {
+                // In list view left/right are no-ops.
+                if self.view_mode == 1 {
+                    Some(cur.saturating_sub(1))
+                } else {
+                    return false;
+                }
+            } else if t == slint::SharedString::from(slint::platform::Key::RightArrow).as_str() {
+                if self.view_mode == 1 {
+                    Some((cur + 1).min(n - 1))
+                } else {
+                    return false;
+                }
+            } else if t == slint::SharedString::from(slint::platform::Key::Home).as_str() {
+                Some(0)
+            } else if t == slint::SharedString::from(slint::platform::Key::End).as_str() {
+                Some(n - 1)
+            } else if t == slint::SharedString::from(slint::platform::Key::PageUp).as_str() {
+                Some(cur.saturating_sub(10))
+            } else if t == slint::SharedString::from(slint::platform::Key::PageDown).as_str() {
+                Some((cur + 10).min(n - 1))
+            } else {
+                None
+            };
+
+        match new_idx {
+            Some(i) => {
+                // Reuse the click pipeline so shift-range, anchor update and
+                // UI push all go through the already-tested path.
+                self.click(i, false, shift);
                 true
             }
-            k if k == slint::SharedString::from(slint::platform::Key::Delete).as_str() => {
-                self.ctx_delete_to_trash();
-                true
-            }
-            k if k == slint::SharedString::from(slint::platform::Key::F2).as_str() => {
-                self.ctx_rename();
-                true
-            }
-            k if k == slint::SharedString::from(slint::platform::Key::F5).as_str() => {
-                self.refresh();
-                true
-            }
-            k if k == slint::SharedString::from(slint::platform::Key::Return).as_str() => {
-                self.ctx_open();
-                true
-            }
-            _ => false,
+            None => false,
         }
     }
 }
@@ -1735,7 +1829,7 @@ fn wire_callbacks(ui: &MainWindow, app: Rc<RefCell<App>>) {
     }
     {
         let app = app.clone();
-        ui.on_key_pressed(move |text| app.borrow_mut().handle_key(text));
+        ui.on_key_pressed(move |text, shift| app.borrow_mut().handle_key(text, shift));
     }
     {
         let app = app.clone();
