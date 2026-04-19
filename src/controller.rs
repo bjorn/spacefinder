@@ -938,6 +938,45 @@ impl App {
         self.refresh_status_text();
     }
 
+    /// Column-view equivalent of [`App::refresh_selection_display`]:
+    /// flip the `selected` flag on only the rows whose path matches
+    /// the previous or new selection. Mirrors the list/grid pattern so
+    /// the Slint `TouchArea` on the clicked cell survives between the
+    /// two presses of a double-click gesture. A full
+    /// `recompute_columns` rebuild would tear down and re-instantiate
+    /// the `TouchArea` under the pointer and drop the pending double-
+    /// click state.
+    ///
+    /// Uses `set_row_data` against the persistent `columns_model`
+    /// established in [`App::new`]. Status text is not refreshed here
+    /// because `compute_status_text` does not depend on
+    /// `column_selected_path`.
+    fn refresh_column_selection_display(&self, prev: Option<&Path>) {
+        let new = self.column_selected_path.as_deref();
+        if prev == new {
+            return;
+        }
+        let row_count = self.columns_model.row_count();
+        for i in 0..row_count {
+            let Some(mut cell) = self.columns_model.row_data(i) else {
+                continue;
+            };
+            let matches_prev = prev
+                .map(|p| cell.path.as_str() == p.to_string_lossy())
+                .unwrap_or(false);
+            let matches_new = new
+                .map(|p| cell.path.as_str() == p.to_string_lossy())
+                .unwrap_or(false);
+            if matches_prev && !matches_new && cell.selected {
+                cell.selected = false;
+                self.columns_model.set_row_data(i, cell);
+            } else if matches_new && !cell.selected {
+                cell.selected = true;
+                self.columns_model.set_row_data(i, cell);
+            }
+        }
+    }
+
     fn double_click(&mut self, idx: usize) {
         if idx >= self.filtered.len() {
             return;
@@ -1114,9 +1153,17 @@ impl App {
 
     /// Column view: single left-click on a cell selects it (highlights
     /// only, no navigation).
+    ///
+    /// Uses per-row `set_row_data` instead of rebuilding the whole
+    /// columns model. A full rebuild tears down the Slint `TouchArea`
+    /// on the clicked cell between the first and second press of a
+    /// double-click, so Slint's double-click state machine never fires.
+    /// Keeping the existing `VecModel` rows alive preserves the
+    /// `TouchArea` instances and lets double-clicks register.
     fn on_column_cell_click(&mut self, path: PathBuf) {
+        let prev = self.column_selected_path.take();
         self.column_selected_path = Some(path);
-        self.recompute_columns();
+        self.refresh_column_selection_display(prev.as_deref());
     }
 
     /// Column view: double left-click. Directories zoom in (navigate
@@ -1147,8 +1194,9 @@ impl App {
     /// selection; the menu's actions will operate on that path via
     /// [`App::selected_paths`] in column mode.
     fn on_column_cell_right_click(&mut self, path: PathBuf, x: f32, y: f32) {
+        let prev = self.column_selected_path.take();
         self.column_selected_path = Some(path);
-        self.recompute_columns();
+        self.refresh_column_selection_display(prev.as_deref());
         // Reuse the list/grid menu-build path. No duplication.
         let Some(ui) = self.ui.upgrade() else { return };
         let entries = item_menu(self);
@@ -1411,8 +1459,9 @@ impl App {
             None => {
                 // Seed to root and stop; one press = "start here".
                 let root = &self.column_cells[0];
+                let prev = self.column_selected_path.take();
                 self.column_selected_path = Some(root.path.clone());
-                self.recompute_columns();
+                self.refresh_column_selection_display(prev.as_deref());
                 return true;
             }
         };
@@ -1483,8 +1532,9 @@ impl App {
         if let Some(i) = target {
             let new_path = self.column_cells[i].path.clone();
             if self.column_selected_path.as_deref() != Some(new_path.as_path()) {
+                let prev = self.column_selected_path.take();
                 self.column_selected_path = Some(new_path);
-                self.recompute_columns();
+                self.refresh_column_selection_display(prev.as_deref());
             }
         }
         // Consume the key either way so the list/grid fallthrough does
