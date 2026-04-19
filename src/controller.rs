@@ -1306,11 +1306,28 @@ impl App {
             .unwrap_or(0)
             .min(n - 1);
 
-        // Grid column count: 1 in list view, live value in grid view.
+        // Grid column count: 1 in list view, computed from the window size
+        // in grid view. We used to forward a reactive `cols` from the Slint
+        // side via an `out property` and a `changed cols` callback, but
+        // that wiring (FileGridView.self.width -> cols -> MainWindow.grid-cols)
+        // formed a binding cycle that Slint flagged at runtime with
+        // "Recursion detected" on first layout when view-mode is Grid.
+        // Instead compute the same formula used in file_grid.slint locally:
+        // cols = max(1, floor((grid_width - 2 * h_padding) / tile_w)).
         let cols = if self.view_mode == 1 {
             self.ui
                 .upgrade()
-                .map(|ui| ui.get_grid_cols().max(1) as usize)
+                .map(|ui| {
+                    let tile_w = 110.0_f32;
+                    let h_padding = 8.0_f32;
+                    let sidebar_w = 224.0_f32;
+                    let divider_w = 1.0_f32;
+                    let scale = ui.window().scale_factor();
+                    let window_w = ui.window().size().width as f32 / scale.max(1e-3);
+                    let grid_w = (window_w - sidebar_w - divider_w).max(tile_w);
+                    let c = ((grid_w - 2.0 * h_padding) / tile_w).floor() as i32;
+                    c.max(1) as usize
+                })
                 .unwrap_or(1)
         } else {
             1

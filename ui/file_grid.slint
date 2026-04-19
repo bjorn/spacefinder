@@ -86,12 +86,13 @@ export component FileGridView inherits Rectangle {
 
     // Reactive grid geometry. cols is derived from the view width, so the
     // layout reflows as the window (and therefore this view) is resized.
-    // `cols` is exposed so the containing window can forward it to Rust
-    // for keyboard navigation (vertical step size).
+    // Rust recomputes its own column count from the window size in
+    // `handle_key` using the same formula below, so this property is
+    // internal-only and not exposed as `out`.
     property <length> tile-w: 110px;
     property <length> tile-h: 124px;
     property <length> h-padding: 8px;
-    out property <int> cols: max(1, floor((self.width - 2 * root.h-padding) / root.tile-w));
+    property <int> cols: max(1, floor((self.width - 2 * root.h-padding) / root.tile-w));
     property <int> row-count: (items.length + cols - 1) / cols;
 
     background: Theme.bg;
