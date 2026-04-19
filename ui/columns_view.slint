@@ -58,6 +58,19 @@ export component ColumnsView inherits Rectangle {
                         : cell.is-dir ? Theme.bg-elevated : Theme.bg-component;
             clip: true;
 
+            // Subtle inner stroke that sits 1px inside the outer border,
+            // making vertically-stacked cells visually more distinct.
+            Rectangle {
+                x: 1px;
+                y: 1px;
+                width: parent.width - 2px;
+                height: parent.height - 2px;
+                border-width: 1px;
+                border-color: Theme.border;
+                border-radius: 1px;
+                background: transparent;
+            }
+
             Text {
                 x: 4px;
                 y: 2px;
