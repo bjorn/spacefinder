@@ -296,7 +296,7 @@ impl App {
     /// `changed content-h` callback is not needed, avoiding the binding
     /// loop it used to trip.
     fn recompute_columns(&self) {
-        let laid = columns::lay_out(&self.current);
+        let laid = columns::lay_out(&self.current, self.show_hidden);
         let selected = self.column_selected_path.as_deref();
         let cells: Vec<ColumnCell> = laid
             .into_iter()
@@ -1156,6 +1156,12 @@ impl App {
     fn toggle_hidden(&mut self) {
         self.show_hidden = !self.show_hidden;
         self.rebuild_view();
+        // Column view does not consume `filtered`; it reads the disk
+        // directly. Recompute its layout so the toggle is reflected
+        // live without needing to leave and re-enter column mode.
+        if self.view_mode == 2 {
+            self.recompute_columns();
+        }
         self.push_ui_state();
         self.persist();
     }

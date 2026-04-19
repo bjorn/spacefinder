@@ -80,7 +80,7 @@ struct RawChild {
     pending: bool,
 }
 
-fn read_children(parent: &Path) -> Vec<RawChild> {
+fn read_children(parent: &Path, show_hidden: bool) -> Vec<RawChild> {
     let mut out = Vec::new();
     let Ok(dir) = fs::read_dir(parent) else {
         return out;
@@ -90,6 +90,13 @@ fn read_children(parent: &Path) -> Vec<RawChild> {
         let is_dir = meta.is_dir();
         let path = entry.path();
         let name = entry.file_name().to_string_lossy().into_owned();
+        // Skip dot-files when the user has not opted in to hidden entries.
+        // We drop them from the iteration entirely, so their size does
+        // not contribute to the parent's total either. See the module
+        // commit note on this MVP tradeoff.
+        if !show_hidden && name.starts_with('.') {
+            continue;
+        }
         let (size, pending) = if is_dir {
             match lookup_cached_size(&path) {
                 Some(n) => (n, false),
@@ -115,7 +122,13 @@ fn read_children(parent: &Path) -> Vec<RawChild> {
 /// multiplies them by its live inner height to place cells. The output
 /// always contains exactly one col-0 cell for the root; deeper columns
 /// may be sparse.
-pub fn lay_out(root: &Path) -> Vec<LaidCell> {
+///
+/// When `show_hidden` is false, entries whose name begins with `.` are
+/// skipped during the directory walk. As a simplification, skipped
+/// entries also drop out of parent size totals: a parent whose only
+/// child is hidden will render empty. This mirrors how list and grid
+/// views consume `filtered` and keeps the layout math trivial.
+pub fn lay_out(root: &Path, show_hidden: bool) -> Vec<LaidCell> {
     let mut cells = Vec::new();
 
     // Root cell: fill the whole column. Its size is the cached total (if
@@ -141,7 +154,7 @@ pub fn lay_out(root: &Path) -> Vec<LaidCell> {
         is_root: true,
     });
 
-    lay_out_children(root, 0.0, 1.0, 1, &mut cells);
+    lay_out_children(root, 0.0, 1.0, 1, show_hidden, &mut cells);
     cells
 }
 
@@ -153,6 +166,7 @@ fn lay_out_children(
     y_start: f32,
     y_end: f32,
     depth: usize,
+    show_hidden: bool,
     cells: &mut Vec<LaidCell>,
 ) {
     if depth >= VISIBLE_COLUMNS {
@@ -163,7 +177,7 @@ fn lay_out_children(
         return;
     }
 
-    let mut entries = read_children(parent_path);
+    let mut entries = read_children(parent_path, show_hidden);
     // Sort largest-first for visual clarity and deterministic ordering.
     entries.sort_by(|a, b| b.size.cmp(&a.size).then_with(|| a.name.cmp(&b.name)));
 
@@ -209,7 +223,7 @@ fn lay_out_children(
             is_root: false,
         });
         if e.is_dir {
-            lay_out_children(&e.path, cursor, cell_y_end, depth + 1, cells);
+            lay_out_children(&e.path, cursor, cell_y_end, depth + 1, show_hidden, cells);
         }
         cursor = cell_y_end;
     }
@@ -236,7 +250,7 @@ mod tests {
         // root will be flagged pending, but it must still be emitted
         // with col=0 and the full fractional span.
         let dir = std::env::temp_dir();
-        let cells = lay_out(&dir);
+        let cells = lay_out(&dir, true);
         assert!(!cells.is_empty(), "lay_out must always emit the root cell");
         let root = &cells[0];
         assert_eq!(root.col, 0);
@@ -249,11 +263,53 @@ mod tests {
     #[test]
     fn cells_stay_within_unit_interval() {
         let dir = std::env::temp_dir();
-        let cells = lay_out(&dir);
+        let cells = lay_out(&dir, true);
         for c in &cells {
             assert!(c.y_start >= 0.0);
             assert!(c.y_end <= 1.0 + 1e-5);
             assert!(c.y_end >= c.y_start);
         }
+    }
+
+    /// Build a small fixture tree and check that dot-files are filtered
+    /// out iff `show_hidden == false`. We write a regular file and a
+    /// hidden file; both carry non-zero bytes so the layout math has a
+    /// positive `total` and actually considers them for emission.
+    #[test]
+    fn hidden_entries_filtered_when_show_hidden_false() {
+        let base = std::env::temp_dir().join(format!(
+            "space-col-hidden-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map(|d| d.as_nanos())
+                .unwrap_or(0)
+        ));
+        fs::create_dir_all(&base).expect("create fixture dir");
+        fs::write(base.join("visible.txt"), b"visible content bytes").expect("write visible");
+        fs::write(base.join(".hidden.txt"), b"hidden content bytes").expect("write hidden");
+
+        let hidden_off = lay_out(&base, false);
+        let names_off: Vec<&str> = hidden_off.iter().map(|c| c.name.as_str()).collect();
+        assert!(
+            names_off.iter().any(|n| *n == "visible.txt"),
+            "visible.txt must appear with show_hidden=false, got {:?}",
+            names_off
+        );
+        assert!(
+            !names_off.iter().any(|n| *n == ".hidden.txt"),
+            ".hidden.txt must NOT appear with show_hidden=false, got {:?}",
+            names_off
+        );
+
+        let hidden_on = lay_out(&base, true);
+        let names_on: Vec<&str> = hidden_on.iter().map(|c| c.name.as_str()).collect();
+        assert!(
+            names_on.iter().any(|n| *n == ".hidden.txt"),
+            ".hidden.txt must appear with show_hidden=true, got {:?}",
+            names_on
+        );
+
+        let _ = fs::remove_dir_all(&base);
     }
 }
