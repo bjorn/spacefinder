@@ -1573,10 +1573,14 @@ pub fn sort_indices(
     folders_first: bool,
 ) -> Vec<usize> {
     let mut out: Vec<usize> = filtered.to_vec();
+    // Folders-first grouping only makes sense when sorting alphabetically by
+    // Name; for Modified/Size the user expects interleaved rows in pure
+    // column order.
+    let group_dirs = folders_first && matches!(sort_col, SortCol::Name);
     out.sort_by(|a, b| {
         let ea = &entries[*a];
         let eb = &entries[*b];
-        if folders_first && ea.is_dir != eb.is_dir {
+        if group_dirs && ea.is_dir != eb.is_dir {
             return if ea.is_dir {
                 std::cmp::Ordering::Less
             } else {
@@ -1750,10 +1754,10 @@ mod tests {
     }
 
     /// Sort by Size, mixture of files and dirs with known and unknown sizes.
-    /// With folders_first and descending order, directories should precede
-    /// files, the known-size directory with the larger total comes first, and
-    /// the still-calculating directory sorts below the known one. Files
-    /// follow, descending by size.
+    /// Even with `folders_first = true`, sorting by Size interleaves files
+    /// and directories in pure size order; the folders-first grouping is a
+    /// Name-column-only rule. Unknown sizes sink below known ones in
+    /// descending order.
     #[test]
     fn sort_indices_by_size_mixed_known_and_unknown() {
         let entries = vec![
@@ -1772,11 +1776,58 @@ mod tests {
             got,
             vec![
                 "adir-big",      // 500, known, dir
+                "cfile-big",     // 100, known, file
                 "adir-small",    // 50, known, dir
-                "zdir-unknown",  // unknown, dir (sinks below known in desc)
-                "cfile-big",     // 100, file
-                "bfile-small",   // 10, file
+                "bfile-small",   // 10, known, file
+                "zdir-unknown",  // unknown (sinks below known in desc)
             ],
+        );
+    }
+
+    /// Folders-first grouping still applies when sorting by Name. With
+    /// `folders_first = true` and ascending Name, directories come before
+    /// files even when that conflicts with pure alphabetical order.
+    #[test]
+    fn sort_indices_by_name_groups_folders_first() {
+        let entries = vec![
+            make_entry("banana", false, 10, SizeState::Known(10)),
+            make_entry("cherry", true, 0, SizeState::Known(0)),
+            make_entry("apple", false, 20, SizeState::Known(20)),
+            make_entry("date", true, 0, SizeState::Known(0)),
+        ];
+        let filtered: Vec<usize> = (0..entries.len()).collect();
+
+        let out = sort_indices(&entries, &filtered, SortCol::Name, true, true);
+        assert_eq!(
+            names(&entries, &out),
+            vec!["cherry", "date", "apple", "banana"],
+        );
+    }
+
+    /// When sorting by Modified, files and directories interleave by the
+    /// modified timestamp regardless of `folders_first`.
+    #[test]
+    fn sort_indices_by_modified_interleaves_dirs_and_files() {
+        use std::time::{Duration, SystemTime};
+        let base = SystemTime::UNIX_EPOCH;
+        let mut mk = |name: &str, is_dir: bool, secs: u64| {
+            let mut e = make_entry(name, is_dir, 0, SizeState::Known(0));
+            e.modified = base + Duration::from_secs(secs);
+            e
+        };
+        let entries = vec![
+            mk("dir-old", true, 10),
+            mk("file-new", false, 40),
+            mk("dir-new", true, 30),
+            mk("file-old", false, 20),
+        ];
+        let filtered: Vec<usize> = (0..entries.len()).collect();
+
+        // Ascending, folders_first = true: pure chronological order.
+        let asc = sort_indices(&entries, &filtered, SortCol::Modified, true, true);
+        assert_eq!(
+            names(&entries, &asc),
+            vec!["dir-old", "file-old", "dir-new", "file-new"],
         );
     }
 
