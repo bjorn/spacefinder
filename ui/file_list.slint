@@ -57,7 +57,7 @@ component ListHeader inherits Rectangle {
             TouchArea { clicked => { root.sort-changed(0); } }
         }
         Rectangle {
-            horizontal-stretch: 1;
+            width: 160px;
             HorizontalLayout {
                 alignment: end;
                 spacing: 4px;
@@ -79,7 +79,7 @@ component ListHeader inherits Rectangle {
             TouchArea { clicked => { root.sort-changed(1); } }
         }
         if root.show-size : Rectangle {
-            horizontal-stretch: 1;
+            width: 90px;
             HorizontalLayout {
                 alignment: end;
                 spacing: 4px;
@@ -151,7 +151,7 @@ component ListRow inherits Rectangle {
             }
         }
         Rectangle {
-            horizontal-stretch: 1;
+            width: 160px;
             Text {
                 width: parent.width;
                 text: root.item.modified-text;
@@ -163,7 +163,7 @@ component ListRow inherits Rectangle {
             }
         }
         Rectangle {
-            horizontal-stretch: 1;
+            width: 90px;
             Text {
                 width: parent.width;
                 text: root.item.size-text;
