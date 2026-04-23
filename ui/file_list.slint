@@ -59,8 +59,14 @@ component ListHeader inherits Rectangle {
         Rectangle {
             horizontal-stretch: 1;
             HorizontalLayout {
-                alignment: start;
+                alignment: end;
                 spacing: 4px;
+                if root.sort-col == 1 : Text {
+                    text: root.sort-asc ? "▲" : "▼";
+                    color: Theme.text-muted;
+                    font-size: 9px;
+                    vertical-alignment: center;
+                }
                 Text {
                     text: @tr("Modified");
                     color: Theme.text-muted;
@@ -68,12 +74,6 @@ component ListHeader inherits Rectangle {
                     font-weight: 600;
                     vertical-alignment: center;
                     overflow: elide;
-                }
-                if root.sort-col == 1 : Text {
-                    text: root.sort-asc ? "▲" : "▼";
-                    color: Theme.text-muted;
-                    font-size: 9px;
-                    vertical-alignment: center;
                 }
             }
             TouchArea { clicked => { root.sort-changed(1); } }
@@ -157,7 +157,7 @@ component ListRow inherits Rectangle {
                 text: root.item.modified-text;
                 color: Theme.text-muted;
                 vertical-alignment: center;
-                horizontal-alignment: left;
+                horizontal-alignment: right;
                 overflow: elide;
                 font-size: 12px;
             }
