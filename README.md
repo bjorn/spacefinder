@@ -32,10 +32,10 @@ delete to free up disk?**
 
 ## What it is not (yet)
 
-See [TODO.md](TODO.md) for the roadmap. Short version: filter bar,
-aggregate summary header, treemap view, duplicate detection (core module
-exists, UI pending), cleanup presets in the sidebar, thumbnails, batch
-operations with undo, watcher-based auto-refresh.
+See [TODO.md](TODO.md) for the roadmap. Short version: age/last-used
+column, filter bar, aggregate summary header, treemap view, duplicate
+detection, cleanup presets in the sidebar, per-MIME async icons,
+thumbnails, batch operations with undo, watcher-based auto-refresh.
 
 ## Tech stack
 
@@ -65,11 +65,15 @@ faster rebuilds across checkouts.
 ## Running
 
 ```
-cargo run --release
+space [PATH]
 ```
 
-The app opens at your home directory by default. Preferences are stored at
-`$XDG_CONFIG_HOME/space/config.json` (typically `~/.config/space/config.json`).
+With no argument the app restores the last-opened directory (or falls
+back to `$HOME` on first run). Pass `PATH` to open a specific directory,
+`--help` for the full CLI, or `--version`.
+
+Preferences are stored at `$XDG_CONFIG_HOME/space/config.json` (typically
+`~/.config/space/config.json`).
 
 Switch views via the three toggle buttons in the header (list, grid,
 columns). Right-click for the context menu. F2 renames, Delete moves to

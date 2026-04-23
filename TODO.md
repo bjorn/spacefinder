@@ -5,48 +5,16 @@ what is **old**, **bulky**, or **redundant** so you can clear it out with
 confidence. Nautilus already does general file management well, so this
 app does not try to compete.
 
-The current code is a generic file browser prototype inherited from an
-earlier port. Most of it stays useful (list/grid, selection, context menu,
-trash action), but the **framing** and **signals** shown in the UI need to
-pivot. This TODO is written with that pivot in mind.
+The plumbing that tells the user what is **bulky** is in place: recursive
+on-disk sizes (blocks × 512, hardlink-deduped) with a process-wide cache,
+plus an icicle columns view that shows size proportions at a glance. The
+cleanup-specific signals for **old** (age columns/filters) and
+**redundant** (duplicate detection) still need to land, along with the
+filter bar, preset sidebar, and summary header that together make the
+pivot from generic file browser to cleanup tool visible in the UI.
 
 Items are roughly ordered, and each is independent unless `Depends on:`
 says otherwise. Pick, reorder, drop as you like.
-
----
-
-## 1. Recursive directory sizes
-
-**Scope:** Show accurate size for directories. Today the list/grid shows
-an empty string for dirs because `fs_scan::Entry::size_text` returns `""`.
-Without this the app cannot tell you what is bulky.
-
-**Files:**
-- `src/fs_scan.rs::Entry`: add `size: u64` that includes contents for dirs
-- `src/fs_scan.rs::scan`: after the cheap `read_dir` pass, kick off a
-  recursive size walk per entry
-- `src/controller.rs::push_ui_state`: use the computed dir size, show
-  "Calculating..." while pending
-
-**Approach:**
-1. After the synchronous shallow scan returns, spawn a background task
-   (`tokio::task::spawn_blocking`) per directory entry that walks with
-   `walkdir` and sums `.len()` via `metadata()`.
-2. Post results back via `slint::invoke_from_event_loop` and update a
-   single row's `size_text` in the Slint model (`VecModel::set_row_data`).
-3. Generation counter so stale results from an old directory are dropped
-   when the user navigates.
-4. Cache results by canonical path plus mtime so re-entering a dir is
-   instant.
-
-**Gotchas:**
-- Symlink loops: pass `walkdir::WalkDir::new(p).follow_links(false)`.
-- Permission errors are common, swallow them silently, report as `?` size.
-- Don't block on NFS or mounted remotes indefinitely. Give each task a
-  reasonable timeout (e.g. 30s) and mark partial results.
-
-**Acceptance:** Open `~`, every directory row shows a real size within a
-few seconds, subsequent visits are instant.
 
 ---
 
@@ -114,8 +82,6 @@ controls: `Size >= [slider: 0 B .. 10 GB]`, `Age >= [slider: 0d .. 10y]`,
 - `ui/summary.slint` (new)
 - `src/controller.rs`: maintain totals as rows are filtered or selected
 
-**Depends on:** #1 (accurate dir sizes).
-
 **Acceptance:** Sums update live as filters and selection change.
 
 ---
@@ -136,8 +102,6 @@ showing each direct child sized proportionally. Click to drill down.
   rectangles for a single level, nested drilldown reruns on click.
 - Each tile labeled with name and size, dimmed when below threshold,
   clickable.
-
-**Depends on:** #1.
 
 **Acceptance:** Treemap view of `~` instantly reveals the biggest
 consumers.
@@ -253,22 +217,6 @@ which 2 GB video to keep.
 
 ---
 
-## 10. Settings persistence
-
-**Scope:** Remember view mode, sort, filter bar state, last scanned
-location, window size.
-
-**Files:**
-- `src/config.rs` (new)
-
-**Approach:**
-- `serde_json` to `$XDG_CONFIG_HOME/space/config.json`.
-- Load at startup, debounced save on change (500 ms).
-
-**Acceptance:** Relaunch restores the session.
-
----
-
 ## 11. Batch operations with undo
 
 **Scope:** Selecting 200 files and moving them to trash must not freeze
@@ -366,82 +314,6 @@ for permission denials.
 
 Lower priority for a cleanup tool. If implemented, source-side DnD via
 the Wayland data device requires window-adapter plumbing.
-
----
-
-## 19. Internationalization
-
-**Scope:** All user-visible strings localized. Wanted even for a disk
-cleanup tool, since non-English users appreciate clear labels when they're
-deciding what to delete.
-
-**Use Slint's built-in translation system**, not fluent / i18n-embed.
-Docs: https://docs.slint.dev/latest/docs/slint/guide/development/translations/
-
-**Marking strings**: wrap in `@tr(...)` inside `.slint` files.
-- Plain: `text: @tr("Cancel");`
-- Interpolation: `text: @tr("Showing {0} of {1}", shown, total);`
-- Plurals: `text: @tr("{n} item" | "{n} items" % count);`
-- Disambiguation: `@tr("Toolbar" => "Cut", ...)`. Default context is the
-  component name; disable globally via
-  `CompilerConfiguration::set_default_translation_context(DefaultTranslationContext::None)`
-  if you want a flat namespace.
-
-**Choose the bundled path, not runtime gettext.** Catalogs compile into
-the binary via `build.rs`; no runtime dependency on system gettext, no
-filesystem lookup at startup, and switching language is a single call.
-
-**Files:**
-- `lang/<locale>/LC_MESSAGES/space.po`  (domain name must match the Cargo
-  package name `space`)
-- `build.rs`: extend the existing `CompilerConfiguration` with
-  `.with_bundled_translations("lang")`
-- `src/main.rs`: optional explicit pick via
-  `slint::select_bundled_translation(&lang)` before creating the window;
-  otherwise Slint auto-detects from the locale (requires the `std` feature
-  on `slint`, already the default).
-- `Cargo.toml`: no extra crate feature needed for the bundled path.
-  Would need `slint = { features = ["gettext"] }` only if we were doing
-  runtime `.mo` loading (skip).
-
-**Tooling:**
-- `cargo install slint-tr-extractor`
-- Extraction:
-  `find ui -name '*.slint' | xargs slint-tr-extractor -o lang/space.pot`
-- Translators produce `lang/<locale>/LC_MESSAGES/space.po` (editors:
-  Poedit, Lokalize, or plain text). Bundled mode reads `.po` directly, no
-  `msgfmt` step.
-
-**Strings living in Rust:**
-The Slint extractor only sees `.slint` files. Status-bar text like
-"Calculating..." or "556 items" is currently formatted in Rust
-(`controller.rs::push_ui_state`). Two options:
-1. **Preferred:** move those into `.slint` via `@tr(...)` by exposing
-   the raw counts/flags as properties and formatting on the UI side.
-   Example: a `status-text` property becomes
-   `status: @tr("{n} item" | "{n} items" % root.total)`.
-2. If some strings really must stay Rust-side (e.g. error messages),
-   add a thin gettext-like helper or use `rust-i18n` scoped to those;
-   keep it small.
-
-Prefer option 1 where possible so the whole catalog comes from one
-extractor pass.
-
-**Language switcher:** post-MVP, but trivial to add: a dropdown in
-settings triggers `slint::select_bundled_translation(selected_locale)`
-and the UI re-renders.
-
-**Acceptance:** `LANG=de_DE cargo run` shows a German UI. Bundled `.po`
-files ship inside the binary, nothing read from disk at runtime.
-
-**Gotchas:**
-- Domain name is the Cargo package name, so renaming the crate breaks
-  translations.
-- `slint-tr-extractor` adds a default context per component name;
-  translators have to preserve that context. Decide early whether to keep
-  it (more structure, more friction) or disable it (flat catalog, short).
-- Bundled translations are baked at build time; `cargo run` after editing
-  a `.po` needs a rebuild. Not an issue, just a heads-up.
 
 ---
 
