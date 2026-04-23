@@ -15,7 +15,7 @@ use std::path::{Path, PathBuf};
 use std::rc::{Rc, Weak};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
-use std::time::{Duration, Instant};
+use std::time::{Duration, Instant, SystemTime};
 
 /// Minimum spacing between consecutive writes of the config file. Additional
 /// state changes inside this window are coalesced into a single follow-up
@@ -383,7 +383,7 @@ impl App {
         }
         let visible = Arc::new(visible);
 
-        let pending: Arc<Mutex<Vec<(PathBuf, SizeState)>>> =
+        let pending: Arc<Mutex<Vec<(PathBuf, SizeState, Option<SystemTime>)>>> =
             Arc::new(Mutex::new(Vec::new()));
         let has_pending = Arc::new(AtomicBool::new(false));
 
@@ -391,8 +391,8 @@ impl App {
         let visible_cb = visible.clone();
         let pending_cb = pending.clone();
         let has_pending_cb = has_pending.clone();
-        let on_progress: crate::dir_size::ProgressFn =
-            Box::new(move |path: &Path, state: SizeState| {
+        let on_progress: crate::dir_size::ProgressFn = Box::new(
+            move |path: &Path, state: SizeState, recursive_mtime: Option<SystemTime>| {
                 if !visible_cb.contains(path) {
                     return;
                 }
@@ -401,7 +401,7 @@ impl App {
                         Ok(g) => g,
                         Err(poisoned) => poisoned.into_inner(),
                     };
-                    buf.push((path.to_path_buf(), state));
+                    buf.push((path.to_path_buf(), state, recursive_mtime));
                 }
                 if has_pending_cb
                     .compare_exchange(
@@ -416,7 +416,7 @@ impl App {
                     let has_pending_cb2 = has_pending_cb.clone();
                     let _ = ui_for_cb.upgrade_in_event_loop(move |_ui| {
                         has_pending_cb2.store(false, Ordering::Release);
-                        let drained: Vec<(PathBuf, SizeState)> = {
+                        let drained: Vec<(PathBuf, SizeState, Option<SystemTime>)> = {
                             let mut buf = match pending_cb2.lock() {
                                 Ok(g) => g,
                                 Err(poisoned) => poisoned.into_inner(),
@@ -434,7 +434,8 @@ impl App {
                         });
                     });
                 }
-            });
+            },
+        );
         engine.compute(self.current.clone(), generation, on_progress);
     }
 
@@ -484,7 +485,7 @@ impl App {
 
         // Shared, batched update buffer. `has_pending` gates the posting of
         // exactly one event-loop dispatch per drain cycle.
-        let pending: Arc<Mutex<Vec<(PathBuf, SizeState)>>> =
+        let pending: Arc<Mutex<Vec<(PathBuf, SizeState, Option<SystemTime>)>>> =
             Arc::new(Mutex::new(Vec::new()));
         let has_pending = Arc::new(AtomicBool::new(false));
 
@@ -497,8 +498,10 @@ impl App {
             let visible = visible.clone();
             let pending = pending.clone();
             let has_pending = has_pending.clone();
-            let on_progress: crate::dir_size::ProgressFn =
-                Box::new(move |path: &Path, state: SizeState| {
+            let on_progress: crate::dir_size::ProgressFn = Box::new(
+                move |path: &Path,
+                      state: SizeState,
+                      recursive_mtime: Option<SystemTime>| {
                     // Scope filter: only paths directly visible in the
                     // current listing can affect a row. Everything else goes
                     // straight to the shared cache and is dropped here.
@@ -512,7 +515,7 @@ impl App {
                             Ok(g) => g,
                             Err(poisoned) => poisoned.into_inner(),
                         };
-                        buf.push((path.to_path_buf(), state));
+                        buf.push((path.to_path_buf(), state, recursive_mtime));
                     }
                     if has_pending
                         .compare_exchange(
@@ -530,7 +533,7 @@ impl App {
                             // worker-side pushes that race in will post a
                             // fresh dispatch for the next frame.
                             has_pending_cb.store(false, Ordering::Release);
-                            let drained: Vec<(PathBuf, SizeState)> = {
+                            let drained: Vec<(PathBuf, SizeState, Option<SystemTime>)> = {
                                 let mut buf = match pending_cb.lock() {
                                     Ok(g) => g,
                                     Err(poisoned) => poisoned.into_inner(),
@@ -554,7 +557,8 @@ impl App {
                             });
                         });
                     }
-                });
+                },
+            );
             engine.compute(dir, generation, on_progress);
         }
     }
@@ -566,13 +570,13 @@ impl App {
     fn apply_size_updates(
         &mut self,
         generation: u64,
-        updates: Vec<(PathBuf, SizeState)>,
+        updates: Vec<(PathBuf, SizeState, Option<SystemTime>)>,
     ) {
         if generation != self.generation {
             return;
         }
-        for (path, state) in updates {
-            self.on_size_update_inner(&path, state);
+        for (path, state, recursive_mtime) in updates {
+            self.on_size_update_inner(&path, state, recursive_mtime);
         }
         // When sorting by size, the per-row `set_row_data` calls above only
         // update the size *text* on existing rows; they do not reorder the
@@ -625,7 +629,12 @@ impl App {
         self.items_model.set_vec(items);
     }
 
-    fn on_size_update_inner(&mut self, path: &Path, state: SizeState) {
+    fn on_size_update_inner(
+        &mut self,
+        path: &Path,
+        state: SizeState,
+        recursive_mtime: Option<SystemTime>,
+    ) {
         // Match by path. Descendants reported by the walker (warming the
         // cache for eventual navigation) won't match, and that's fine.
         let Some(eidx) = self.entries.iter().position(|e| e.path == path) else {
@@ -636,6 +645,13 @@ impl App {
             return;
         }
         entry.size_state = state;
+        // Replace the directory's own mtime with the recursive maximum once
+        // the walker knows it. The own-mtime only reflects direct child
+        // add/remove, so edits inside descendants would otherwise leave
+        // the row showing a misleadingly old time.
+        if let Some(t) = recursive_mtime {
+            entry.modified = t;
+        }
 
         // Update the corresponding row in the live model, if visible.
         let Some(display_idx) = self.filtered.iter().position(|&i| i == eidx) else {
@@ -643,6 +659,7 @@ impl App {
         };
         if let Some(mut item) = self.items_model.row_data(display_idx) {
             item.size_text = entry.size_text().into();
+            item.modified_text = entry.modified_text().into();
             self.items_model.set_row_data(display_idx, item);
         }
     }

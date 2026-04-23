@@ -42,13 +42,23 @@ use crate::fs_scan::{on_disk_bytes, SizeState};
 
 type CacheKey = (PathBuf, SystemTime);
 
-static CACHE: LazyLock<Mutex<FxHashMap<CacheKey, u64>>> =
+/// Cached per-directory aggregate: total on-disk bytes plus the most recent
+/// mtime seen anywhere in the subtree (the dir's own mtime reflects only
+/// direct child add/remove, which is misleading for "last modified").
+#[derive(Copy, Clone, Debug)]
+struct CachedAgg {
+    size: u64,
+    recursive_mtime: Option<SystemTime>,
+}
+
+static CACHE: LazyLock<Mutex<FxHashMap<CacheKey, CachedAgg>>> =
     LazyLock::new(|| Mutex::new(FxHashMap::default()));
 
 /// Callback invoked for every directory whose size is settled during a walk.
-/// Receives the directory path and either the computed size or `Unknown` if
-/// the subtree could not be fully read (permission error, I/O error, ...).
-pub type ProgressFn = Box<dyn Fn(&Path, SizeState) + Send + Sync>;
+/// Receives the directory path, either the computed size or `Unknown`, and —
+/// when known — the maximum mtime across the subtree (so dir rows can show
+/// "last modified anywhere inside", not just "last direct-child change").
+pub type ProgressFn = Box<dyn Fn(&Path, SizeState, Option<SystemTime>) + Send + Sync>;
 
 /// Parallel size computer with a shared cache.
 pub struct SizeEngine {
@@ -84,8 +94,8 @@ impl SizeEngine {
     pub fn compute(&self, dir: PathBuf, _generation: u64, on_progress: ProgressFn) {
         // Fast path: cache hit for the top-level dir. This is the common case
         // when re-navigating into a previously-walked tree.
-        if let Some((key, size)) = lookup_cached(&dir) {
-            on_progress(&key.0, SizeState::Known(size));
+        if let Some((key, agg)) = lookup_cached(&dir) {
+            on_progress(&key.0, SizeState::Known(agg.size), agg.recursive_mtime);
             return;
         }
 
@@ -97,13 +107,13 @@ impl SizeEngine {
     }
 }
 
-/// Look up a dir's cached size. Returns `(canonical_key, size)` on hit.
-fn lookup_cached(dir: &Path) -> Option<(CacheKey, u64)> {
+/// Look up a dir's cached aggregate. Returns `(canonical_key, agg)` on hit.
+fn lookup_cached(dir: &Path) -> Option<(CacheKey, CachedAgg)> {
     let canon = std::fs::canonicalize(dir).ok()?;
     let mtime = std::fs::metadata(&canon).ok()?.modified().ok()?;
     let key = (canon, mtime);
     let cache = CACHE.lock().ok()?;
-    cache.get(&key).copied().map(|s| (key, s))
+    cache.get(&key).copied().map(|a| (key, a))
 }
 
 /// Synchronous cache probe for callers that need just the size. Returns
@@ -111,7 +121,7 @@ fn lookup_cached(dir: &Path) -> Option<(CacheKey, u64)> {
 /// mtime. Does not schedule a walk; use [`SizeEngine::compute`] if a
 /// miss should trigger background work.
 pub fn lookup_cached_size(dir: &Path) -> Option<u64> {
-    lookup_cached(dir).map(|(_, size)| size)
+    lookup_cached(dir).map(|(_, agg)| agg.size)
 }
 
 /// Perform the full walk for `root`, populate the cache, and emit
@@ -127,14 +137,18 @@ fn walk_and_aggregate(
         Ok(p) => p,
         Err(e) => {
             log::debug!("size: canonicalize {:?} failed: {}", root, e);
-            on_progress(root, SizeState::Unknown);
+            on_progress(root, SizeState::Unknown, None);
             return;
         }
     };
 
-    // Per-directory accumulator: direct file bytes only (subdir contributions
-    // are added in the bottom-up pass below).
-    let mut dir_info: FxHashMap<PathBuf, (SystemTime, u64)> = FxHashMap::default();
+    // Per-directory accumulator. Tuple is
+    // `(own_mtime, direct_bytes, running_max_mtime)`: own_mtime keys the
+    // cache; direct_bytes is summed at file-encounter time and rolled up
+    // bottom-up; running_max_mtime starts at own_mtime and is bumped by
+    // every file and (in the rollup pass) every descendant's final max.
+    let mut dir_info: FxHashMap<PathBuf, (SystemTime, u64, SystemTime)> =
+        FxHashMap::default();
     // Parent-dir path → child-dir paths, for the aggregation pass.
     let mut dir_children: FxHashMap<PathBuf, Vec<PathBuf>> = FxHashMap::default();
     // Dirs we failed to read completely. Their size is Unknown.
@@ -149,11 +163,11 @@ fn walk_and_aggregate(
     match std::fs::metadata(&canon_root) {
         Ok(meta) => {
             let mtime = meta.modified().unwrap_or(SystemTime::UNIX_EPOCH);
-            dir_info.insert(canon_root.clone(), (mtime, 0));
+            dir_info.insert(canon_root.clone(), (mtime, 0, mtime));
         }
         Err(e) => {
             log::debug!("size: stat root {:?} failed: {}", canon_root, e);
-            on_progress(&canon_root, SizeState::Unknown);
+            on_progress(&canon_root, SizeState::Unknown, None);
             return;
         }
     }
@@ -181,7 +195,9 @@ fn walk_and_aggregate(
                         .ok()
                         .and_then(|m| m.modified().ok())
                         .unwrap_or(SystemTime::UNIX_EPOCH);
-                    dir_info.entry(path.clone()).or_insert((mtime, 0));
+                    dir_info
+                        .entry(path.clone())
+                        .or_insert((mtime, 0, mtime));
                     // Remember this dir under its parent (skip the root itself;
                     // its parent is outside the walk).
                     if path != canon_root {
@@ -202,8 +218,13 @@ fn walk_and_aggregate(
                             continue;
                         }
                         let bytes = on_disk_bytes(&meta);
+                        let file_mtime =
+                            meta.modified().unwrap_or(SystemTime::UNIX_EPOCH);
                         if let Some(info) = dir_info.get_mut(&parent) {
                             info.1 = info.1.saturating_add(bytes);
+                            if file_mtime > info.2 {
+                                info.2 = file_mtime;
+                            }
                         } else {
                             // Parent not yet registered (root's direct files):
                             // ensure the parent exists.
@@ -211,7 +232,8 @@ fn walk_and_aggregate(
                                 .ok()
                                 .and_then(|m| m.modified().ok())
                                 .unwrap_or(SystemTime::UNIX_EPOCH);
-                            dir_info.insert(parent.clone(), (parent_mtime, bytes));
+                            let max = parent_mtime.max(file_mtime);
+                            dir_info.insert(parent.clone(), (parent_mtime, bytes, max));
                         }
                     }
                 }
@@ -230,33 +252,41 @@ fn walk_and_aggregate(
     let mut dirs: Vec<PathBuf> = dir_info.keys().cloned().collect();
     dirs.sort_by_key(|p| std::cmp::Reverse(p.components().count()));
 
-    let mut totals: FxHashMap<PathBuf, u64> = FxHashMap::default();
+    // Per-dir final totals: (size_bytes, recursive_max_mtime).
+    let mut totals: FxHashMap<PathBuf, (u64, SystemTime)> = FxHashMap::default();
     for dir in dirs {
-        let (mtime, direct_files) = dir_info[&dir];
+        let (own_mtime, direct_files, mut max_mtime) = dir_info[&dir];
         let is_error_dir = dir_errors.contains_key(&dir);
         let mut subtotal: u64 = direct_files;
         if let Some(children) = dir_children.get(&dir) {
             for child in children {
-                if let Some(&child_total) = totals.get(child) {
+                if let Some(&(child_total, child_max)) = totals.get(child) {
                     subtotal = subtotal.saturating_add(child_total);
+                    if child_max > max_mtime {
+                        max_mtime = child_max;
+                    }
                 }
             }
         }
-        totals.insert(dir.clone(), subtotal);
+        totals.insert(dir.clone(), (subtotal, max_mtime));
 
         if is_error_dir {
             // The directory itself was unreadable: we have no idea what's
             // inside. Do not cache; a retry later may succeed (e.g. after the
             // user fixes permissions).
-            on_progress(&dir, SizeState::Unknown);
+            on_progress(&dir, SizeState::Unknown, None);
         } else {
             // Populate the cache and notify the caller. The total is a
             // best-effort sum: any unreadable descendants simply don't
             // contribute their bytes to our tally.
+            let agg = CachedAgg {
+                size: subtotal,
+                recursive_mtime: Some(max_mtime),
+            };
             if let Ok(mut cache) = CACHE.lock() {
-                cache.insert((dir.clone(), mtime), subtotal);
+                cache.insert((dir.clone(), own_mtime), agg);
             }
-            on_progress(&dir, SizeState::Known(subtotal));
+            on_progress(&dir, SizeState::Known(subtotal), agg.recursive_mtime);
         }
     }
 }
@@ -393,7 +423,7 @@ mod tests {
         engine.compute(
             root.clone(),
             1,
-            Box::new(move |p, _s| {
+            Box::new(move |p, _s, _m| {
                 raw_cb.fetch_add(1, Ordering::Relaxed);
                 if visible_for_cb.contains_key(p) {
                     filtered_cb.lock().unwrap().push(p.to_path_buf());
@@ -481,6 +511,61 @@ mod tests {
         let _ = std::fs::remove_dir_all(&root);
     }
 
+    /// Directories should report the max mtime across their subtree, not
+    /// their own `st_mtime` (which only reflects direct child add/remove).
+    /// This guards the case the user hit: `root/` unchanged since long ago,
+    /// but `root/sub/file.txt` written recently — the row should show the
+    /// recent time, not the stale dir time.
+    #[test]
+    fn recursive_mtime_reflects_deepest_change() {
+        let nanos = SystemTime::now()
+            .duration_since(SystemTime::UNIX_EPOCH)
+            .map(|d| d.as_nanos())
+            .unwrap_or(0);
+        let root = std::env::temp_dir().join(format!(
+            "space-dir-size-rmtime-{}-{}",
+            std::process::id(),
+            nanos
+        ));
+        std::fs::create_dir_all(root.join("sub")).unwrap();
+        // Record root's own mtime *before* touching anything deeper. On
+        // Linux, creating a grandchild file bumps `sub`'s mtime but not
+        // `root`'s, which is the whole point — root's stat mtime stays
+        // older than the new file's.
+        let root_own_mtime = std::fs::metadata(&root).unwrap().modified().unwrap();
+        // Let wall clock advance enough that filesystem-granularity mtimes
+        // can distinguish the two events. ext4/btrfs are nanosecond, but
+        // tmpfs on older kernels falls back to seconds — pause a touch
+        // more than one second to be safe.
+        std::thread::sleep(std::time::Duration::from_millis(1100));
+        let deep = root.join("sub/file.txt");
+        std::fs::write(&deep, b"hi").unwrap();
+        let deep_mtime = std::fs::metadata(&deep).unwrap().modified().unwrap();
+        assert!(
+            deep_mtime > root_own_mtime,
+            "test setup: deep file must be newer than root"
+        );
+
+        let engine = SizeEngine::new();
+        let run = run_once(&engine, &root, 1);
+        let reported = run
+            .root_recursive_mtime
+            .expect("recursive mtime should be delivered");
+        assert!(
+            reported >= deep_mtime,
+            "recursive mtime {:?} should cover deep file {:?}",
+            reported,
+            deep_mtime
+        );
+        assert!(
+            reported > root_own_mtime,
+            "recursive mtime {:?} should exceed root's own mtime {:?}",
+            reported,
+            root_own_mtime
+        );
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
     /// Ad-hoc probe against a real path:
     /// `SPACE_PROBE=/some/dir cargo test --release -- --nocapture --ignored size_probe`
     #[test]
@@ -529,17 +614,21 @@ mod tests {
     struct BenchRun {
         elapsed: std::time::Duration,
         root_total: Option<u64>,
+        root_recursive_mtime: Option<SystemTime>,
         dirs_seen: u64,
     }
 
     fn run_once(engine: &SizeEngine, dir: &Path, generation: u64) -> BenchRun {
         let hits = Arc::new(AtomicU64::new(0));
         let total = Arc::new(std::sync::Mutex::new(None::<u64>));
+        let rec_mtime: Arc<std::sync::Mutex<Option<SystemTime>>> =
+            Arc::new(std::sync::Mutex::new(None));
         let done = Arc::new(std::sync::Mutex::new(false));
         let cv = Arc::new(std::sync::Condvar::new());
 
         let hits_cb = hits.clone();
         let total_cb = total.clone();
+        let rec_mtime_cb = rec_mtime.clone();
         let done_cb = done.clone();
         let cv_cb = cv.clone();
         // Canonicalize so we match the engine's reported path.
@@ -549,12 +638,13 @@ mod tests {
         engine.compute(
             dir.to_path_buf(),
             generation,
-            Box::new(move |p, s| {
+            Box::new(move |p, s, m| {
                 hits_cb.fetch_add(1, Ordering::Relaxed);
                 if p == target {
                     if let SizeState::Known(n) = s {
                         *total_cb.lock().unwrap() = Some(n);
                     }
+                    *rec_mtime_cb.lock().unwrap() = m;
                     let mut g = done_cb.lock().unwrap();
                     *g = true;
                     cv_cb.notify_all();
@@ -570,6 +660,7 @@ mod tests {
         BenchRun {
             elapsed: start.elapsed(),
             root_total: *total.lock().unwrap(),
+            root_recursive_mtime: *rec_mtime.lock().unwrap(),
             dirs_seen: hits.load(Ordering::Relaxed),
         }
     }

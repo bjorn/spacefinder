@@ -153,7 +153,7 @@ pub fn spawn_places_size_jobs(
 
         let ui_for_cb = ui.clone();
         let on_progress: crate::dir_size::ProgressFn =
-            Box::new(move |reported: &Path, state: SizeState| {
+            Box::new(move |reported: &Path, state: SizeState, _recursive_mtime| {
                 if !keys.contains_key(reported) {
                     return;
                 }
