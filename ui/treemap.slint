@@ -1,9 +1,12 @@
 import { Theme } from "theme.slint";
 
 export struct Tile {
+    // Index into the controller's `filtered` slice. Shared with the
+    // list and grid views so the same click handler and
+    // `selection: FxHashSet<usize>` back all three views.
+    index: int,
     name: string,
     size-text: string,
-    path: string,
     is-dir: bool,
     pending: bool,
     selected: bool,
@@ -18,12 +21,16 @@ export struct Tile {
 
 export component TreemapView inherits Rectangle {
     in property <[Tile]> tiles;
-    // Single left-click: select the tile.
-    callback tile-clicked(string);
+    // Single left-click: select the tile (ctrl toggles within the
+    // existing selection; shift is unused in the treemap because a
+    // rectangular range doesn't map naturally onto squarified tiles).
+    callback tile-clicked(int, bool);
     // Double left-click: directories drill down, files open in the OS.
-    callback tile-double-clicked(string, bool);
-    // Right-click: open the context menu at screen-relative (x, y).
-    callback tile-right-clicked(string, length, length);
+    callback tile-double-clicked(int);
+    // Right-click: open the context menu at view-relative (x, y).
+    // Main.slint converts to screen coords, matching the list/grid
+    // `item-right-clicked` convention.
+    callback tile-right-clicked(int, length, length);
     // Clicks on the empty background clear the selection.
     callback background-clicked();
     callback background-right-clicked(length, length);
@@ -39,10 +46,7 @@ export component TreemapView inherits Rectangle {
     bg-touch := TouchArea {
         pointer-event(ev) => {
             if (ev.button == PointerEventButton.right && ev.kind == PointerEventKind.down) {
-                root.background-right-clicked(
-                    self.mouse-x + parent.absolute-position.x,
-                    self.mouse-y + parent.absolute-position.y,
-                );
+                root.background-right-clicked(self.mouse-x, self.mouse-y);
             }
         }
         clicked => { root.background-clicked(); }
@@ -105,20 +109,29 @@ export component TreemapView inherits Rectangle {
 
             touch := TouchArea {
                 mouse-cursor: pointer;
+                // Latch the modifier bits on every pointer-event so the
+                // later `clicked` handler has them, mirroring the
+                // file_grid.slint GridTile pattern.
+                property <bool> ctrl-held: false;
                 pointer-event(ev) => {
+                    self.ctrl-held = ev.modifiers.control;
                     if (ev.button == PointerEventButton.right && ev.kind == PointerEventKind.down) {
+                        // Emit view-relative coordinates. Main.slint
+                        // adds the TreemapView's absolute-position to
+                        // turn these into screen coords before opening
+                        // the context menu.
                         root.tile-right-clicked(
-                            tile.path,
-                            self.mouse-x + parent.absolute-position.x,
-                            self.mouse-y + parent.absolute-position.y,
+                            tile.index,
+                            self.mouse-x + parent.x + inner.x,
+                            self.mouse-y + parent.y + inner.y,
                         );
                     }
                 }
                 clicked => {
-                    root.tile-clicked(tile.path);
+                    root.tile-clicked(tile.index, self.ctrl-held);
                 }
                 double-clicked => {
-                    root.tile-double-clicked(tile.path, tile.is-dir);
+                    root.tile-double-clicked(tile.index);
                 }
             }
         }

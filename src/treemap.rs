@@ -1,34 +1,45 @@
 //! Squarified treemap layout.
 //!
-//! Computes a flat `Vec<Tile>` of positioned rectangles for the direct
-//! children of a single directory. Each tile's size is proportional to
-//! the child's on-disk bytes, and tiles are packed with the classic
-//! squarified algorithm (Bruls, Huijsen, van Wijk 2000) so their aspect
-//! ratios stay close to 1.
+//! Computes a flat `Vec<Tile>` of positioned rectangles for a caller-
+//! supplied set of children. Each tile's size is proportional to the
+//! child's on-disk bytes, and tiles are packed with the classic
+//! squarified algorithm (Bruls, Huijsen, van Wijk 2000) so their
+//! aspect ratios stay close to 1.
 //!
-//! Sizes come from two places:
-//! - Files: `std::fs::metadata(path).len()`, read synchronously during
-//!   the shallow scan of the parent.
-//! - Directories: [`SizeEngine`]'s process-wide cache, populated by the
-//!   background walker. A cached hit is used directly; a miss drops the
-//!   child out of this layout entirely because it has no area to occupy
-//!   yet. The next recomputation (triggered by every batched size
-//!   update in the controller) picks it up.
+//! # Input
+//!
+//! [`lay_out`] takes a slice of [`TileInput`] supplied by the
+//! controller. This keeps the module independent of where the entries
+//! come from: the controller reuses its `filtered` slice (indices into
+//! `entries`) so the treemap shares the same filter/search/sort
+//! pipeline — and critically the same `row_index` values — as the
+//! list and grid views. Each output [`Tile`] echoes the input's
+//! `row_index` verbatim so clicks can be routed through the same
+//! `click(display_idx, ctrl, shift)` handler used by list/grid.
+//!
+//! # Skipping zero-area entries
+//!
+//! A child with `size == 0` (either a truly empty file or a directory
+//! whose background size walk has not yet settled) cannot contribute
+//! visible area. Such entries are dropped from the output and re-join
+//! the layout once the walker reports a non-zero size. The controller
+//! recomputes the layout on every batched size update so pending
+//! directories materialize smoothly.
+//!
+//! # Coordinates
 //!
 //! Layout is produced in fractional coordinates: every tile carries
 //! `x`, `y`, `w`, `h` in `[0.0, 1.0]` relative to the usable area. The
 //! Slint side multiplies by its live width and height so a window
 //! resize reflows entirely in the render layer, no Rust round-trip.
 //!
-//! The treemap is strictly single-level: only direct children of the
-//! root are laid out. Drill-down is implemented by the controller by
-//! navigating into a tile and re-running `lay_out` against the new
-//! directory, mirroring how the list and grid views consume `navigate`.
+//! The treemap is strictly single-level: only one directory's children
+//! are laid out per call. Drill-down is implemented by the controller
+//! by navigating into a tile and re-running `lay_out` against the new
+//! directory, mirroring how the list and grid views consume
+//! `navigate`.
 
-use crate::dir_size::lookup_cached_size;
 use humansize::{format_size, BINARY};
-use std::fs;
-use std::path::{Path, PathBuf};
 
 /// Any tile with area smaller than this fraction of the usable area is
 /// dropped from the output. At a 1000×700 view that is roughly a single
@@ -36,19 +47,41 @@ use std::path::{Path, PathBuf};
 /// directories without losing any visually meaningful rows.
 const MIN_RENDERABLE_FRAC_AREA: f32 = 1.0 / 700_000.0;
 
-/// A positioned tile in the squarified layout. Mirrors the Slint `Tile`
-/// struct (see `ui/treemap.slint`), but carries an owned `PathBuf`
-/// rather than the Slint `string` form so callers can pass it back
-/// through path APIs without reparsing.
+/// Shallow per-child snapshot fed to [`lay_out`]. The `row_index` is
+/// the caller's identifier for this child (usually the index into the
+/// controller's `filtered` slice); `lay_out` echoes it back in each
+/// resulting [`Tile`] so callbacks can route through the same indexed
+/// click handlers as the list and grid views.
+#[derive(Debug, Clone)]
+pub struct TileInput<'a> {
+    pub row_index: usize,
+    pub name: &'a str,
+    pub is_dir: bool,
+    /// Best-known on-disk bytes. Zero means either an empty entry or a
+    /// directory still being sized; either way the entry is dropped
+    /// from the output.
+    pub size: u64,
+    /// Directory whose size is not yet in the shared cache. Included
+    /// here so the UI can render partially-known rows with the
+    /// "pending" styling (dimmed text, trailing `+` on totals) once
+    /// we add back that treatment.
+    pub pending: bool,
+}
+
+/// A positioned tile in the squarified layout. Mirrors the Slint
+/// `Tile` struct (see `ui/treemap.slint`). `x`, `y`, `w`, `h` are
+/// fractions in `[0.0, 1.0]` of the view's usable area.
 ///
-/// `x`, `y`, `w`, `h` are fractions in `[0.0, 1.0]` of the view's usable
-/// area.
+/// `row_index` threads the controller's `filtered` index through the
+/// layout so a click on a tile can be turned back into a
+/// `click(display_idx, ctrl, shift)` call without a path-to-index
+/// lookup.
 #[derive(Debug, Clone)]
 pub struct Tile {
+    pub row_index: usize,
     pub name: String,
     pub size_text: String,
     pub is_dir: bool,
-    pub path: PathBuf,
     pub pending: bool,
     pub x: f32,
     pub y: f32,
@@ -56,88 +89,48 @@ pub struct Tile {
     pub h: f32,
 }
 
-/// Shallow per-child snapshot fed to the layout. Mirrors the fields
-/// `lay_out` needs without pulling in the heavier `fs_scan::Entry`, so
-/// this module stays usable even at levels where the controller did
-/// not scan into `entries`.
-struct RawChild {
-    name: String,
-    path: PathBuf,
-    is_dir: bool,
-    size: u64,
-    /// Directory whose size is not yet in the shared cache.
-    pending: bool,
-}
-
-fn read_children(parent: &Path, show_hidden: bool) -> Vec<RawChild> {
-    let mut out = Vec::new();
-    let Ok(dir) = fs::read_dir(parent) else {
-        return out;
-    };
-    for entry in dir.flatten() {
-        let Ok(meta) = entry.metadata() else { continue };
-        let is_dir = meta.is_dir();
-        let path = entry.path();
-        let name = entry.file_name().to_string_lossy().into_owned();
-        if !show_hidden && name.starts_with('.') {
-            continue;
-        }
-        let (size, pending) = if is_dir {
-            match lookup_cached_size(&path) {
-                Some(n) => (n, false),
-                None => (0, true),
-            }
-        } else {
-            (crate::fs_scan::on_disk_bytes(&meta), false)
-        };
-        out.push(RawChild {
-            name,
-            path,
-            is_dir,
-            size,
-            pending,
-        });
-    }
-    out
-}
-
-/// Build the tile list for the direct children of `root` in fractional
-/// coordinates. Children whose size is zero or not yet known are dropped
-/// because they have no area to occupy; they re-appear as soon as the
-/// background size walker settles them.
-pub fn lay_out(root: &Path, show_hidden: bool) -> Vec<Tile> {
-    let mut entries = read_children(root, show_hidden);
-    // Skip entries that cannot contribute area. Pending dirs rejoin the
-    // layout once the walker fills in their size.
-    entries.retain(|e| e.size > 0);
-    if entries.is_empty() {
+/// Build the tile list for the supplied children in fractional
+/// coordinates. Children with `size == 0` are dropped because they
+/// cannot occupy any visible area; they reappear on the next call
+/// once the background walker fills in their size.
+pub fn lay_out(inputs: &[TileInput<'_>]) -> Vec<Tile> {
+    // Keep only entries that can actually contribute area. Clone the
+    // pointers into a local vec so the sort below doesn't need to mutate
+    // the caller's slice.
+    let mut usable: Vec<&TileInput> = inputs.iter().filter(|e| e.size > 0).collect();
+    if usable.is_empty() {
         return Vec::new();
     }
 
     // Largest first, for visual clarity and so the squarified algorithm
-    // places the big rocks before the pebbles.
-    entries.sort_by(|a, b| b.size.cmp(&a.size).then_with(|| a.name.cmp(&b.name)));
+    // places the big rocks before the pebbles. The user's chosen sort
+    // column (Name/Modified/Size) is intentionally ignored here — a
+    // treemap sorted by name gives pathological aspect ratios.
+    usable.sort_by(|a, b| b.size.cmp(&a.size).then_with(|| a.name.cmp(b.name)));
 
-    let total: u64 = entries.iter().map(|e| e.size).sum();
+    let total: u64 = usable.iter().map(|e| e.size).sum();
     if total == 0 {
         return Vec::new();
     }
 
     // Normalize sizes into the unit square. Each normalized size is the
     // target area (w·h) of that tile inside a 1×1 rectangle.
-    let sizes: Vec<f32> = entries.iter().map(|e| e.size as f32 / total as f32).collect();
+    let sizes: Vec<f32> = usable
+        .iter()
+        .map(|e| e.size as f32 / total as f32)
+        .collect();
     let rects = squarify(&sizes, Rect { x: 0.0, y: 0.0, w: 1.0, h: 1.0 });
 
-    let mut tiles = Vec::with_capacity(entries.len());
-    for (e, r) in entries.into_iter().zip(rects.into_iter()) {
+    let mut tiles = Vec::with_capacity(usable.len());
+    for (e, r) in usable.into_iter().zip(rects.into_iter()) {
         if r.w * r.h < MIN_RENDERABLE_FRAC_AREA {
             continue;
         }
         tiles.push(Tile {
-            name: e.name,
+            row_index: e.row_index,
+            name: e.name.to_string(),
             size_text: format_size(e.size, BINARY),
             is_dir: e.is_dir,
-            path: e.path,
             pending: e.pending,
             x: r.x,
             y: r.y,
@@ -387,43 +380,40 @@ mod tests {
         assert_eq!(with_zero[2].h, 0.0);
     }
 
-    /// Fixture dir with a known set of visible and hidden files: the
-    /// `show_hidden` flag must filter dot-entries out of the layout.
+    /// Entries with `size == 0` are dropped; the remaining entries'
+    /// `row_index` values survive the layout so the caller can still
+    /// route clicks back through the same `filtered` index.
     #[test]
-    fn hidden_entries_filtered_when_show_hidden_false() {
-        let base = std::env::temp_dir().join(format!(
-            "space-tm-hidden-{}-{}",
-            std::process::id(),
-            std::time::SystemTime::now()
-                .duration_since(std::time::UNIX_EPOCH)
-                .map(|d| d.as_nanos())
-                .unwrap_or(0)
-        ));
-        fs::create_dir_all(&base).expect("create fixture dir");
-        fs::write(base.join("visible.txt"), b"visible content bytes").expect("write visible");
-        fs::write(base.join(".hidden.txt"), b"hidden content bytes").expect("write hidden");
-
-        let off = lay_out(&base, false);
-        let names_off: Vec<&str> = off.iter().map(|t| t.name.as_str()).collect();
-        assert!(
-            names_off.iter().any(|n| *n == "visible.txt"),
-            "visible.txt must appear with show_hidden=false, got {:?}",
-            names_off
-        );
-        assert!(
-            !names_off.iter().any(|n| *n == ".hidden.txt"),
-            ".hidden.txt must NOT appear with show_hidden=false, got {:?}",
-            names_off
-        );
-
-        let on = lay_out(&base, true);
-        let names_on: Vec<&str> = on.iter().map(|t| t.name.as_str()).collect();
-        assert!(
-            names_on.iter().any(|n| *n == ".hidden.txt"),
-            ".hidden.txt must appear with show_hidden=true, got {:?}",
-            names_on
-        );
-
-        let _ = fs::remove_dir_all(&base);
+    fn lay_out_drops_zero_size_and_preserves_row_index() {
+        let inputs = vec![
+            TileInput {
+                row_index: 7,
+                name: "small",
+                is_dir: false,
+                size: 100,
+                pending: false,
+            },
+            TileInput {
+                row_index: 9,
+                name: "pending",
+                is_dir: true,
+                size: 0,
+                pending: true,
+            },
+            TileInput {
+                row_index: 11,
+                name: "large",
+                is_dir: false,
+                size: 900,
+                pending: false,
+            },
+        ];
+        let tiles = lay_out(&inputs);
+        // The pending entry is dropped; the two non-zero entries remain.
+        assert_eq!(tiles.len(), 2);
+        let row_indices: Vec<usize> = tiles.iter().map(|t| t.row_index).collect();
+        assert!(row_indices.contains(&7));
+        assert!(row_indices.contains(&11));
+        assert!(!row_indices.contains(&9));
     }
 }

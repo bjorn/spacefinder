@@ -81,19 +81,20 @@ export component MainWindow inherits Window {
     callback rename-dialog-accepted(string);
     callback confirm-accepted();
 
-    // Columns view events.
+    // Columns view events. The columns view shows deep descendants
+    // whose paths may not correspond to any row in `items`, so clicks
+    // stay path-based and bypass the shared `selection` state used by
+    // list/grid/treemap.
     callback columns-cell-clicked(string);
     callback columns-cell-double-clicked(string, bool, bool);
-    // Treemap view events.
-    callback treemap-tile-clicked(string);
-    callback treemap-tile-double-clicked(string, bool);
-    // Right-click on a columns cell or treemap tile opens the item
-    // context menu at the given screen-relative position. Path-keyed
-    // so the handler can operate directly on the clicked cell/tile,
-    // unlike the list/grid `item-right-clicked` callback which uses an
-    // index into `items`. Shared between both views; Rust-side
-    // dispatches on `view-mode`.
+    // Right-click on a columns cell opens the item context menu at
+    // the given screen-relative position.
     callback item-path-right-clicked(string, length, length);
+    // Treemap view events. Treemap tiles map 1:1 to rows in `items`
+    // via the `index` field, so these funnel through the same
+    // `item-clicked` / `item-double-clicked` / `item-right-clicked`
+    // callbacks as list/grid — selection state is shared across the
+    // three views.
 
     callback key-pressed(string, bool) -> bool;
 
@@ -190,14 +191,15 @@ export component MainWindow inherits Window {
                     }
                     if root.view-mode == 3 : TreemapView {
                         tiles: root.treemap-tiles;
-                        tile-clicked(path) => {
-                            root.treemap-tile-clicked(path);
+                        tile-clicked(i, ctrl) => {
+                            // Share the list/grid click handler. Pass
+                            // `shift = false` since range-select makes
+                            // no intuitive sense in a 2D treemap.
+                            root.item-clicked(i, ctrl, false);
                         }
-                        tile-double-clicked(path, is-dir) => {
-                            root.treemap-tile-double-clicked(path, is-dir);
-                        }
-                        tile-right-clicked(path, x, y) => {
-                            root.item-path-right-clicked(path, x, y);
+                        tile-double-clicked(i) => { root.item-double-clicked(i); }
+                        tile-right-clicked(i, x, y) => {
+                            root.item-right-clicked(i, x + parent.absolute-position.x, y + parent.absolute-position.y);
                         }
                         background-clicked => { root.background-clicked(); }
                         background-right-clicked(x, y) => {
