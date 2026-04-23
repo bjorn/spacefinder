@@ -73,7 +73,7 @@ export component HeaderBar inherits Rectangle {
     in property <string> current-path;
     in-out property <bool> path-edit-mode: false;
     in property <string> search-text;
-    in property <int> view-mode;  // 0 = list, 1 = grid
+    in property <int> view-mode;  // 0 = list, 1 = grid, 2 = columns, 3 = treemap
 
     callback back-clicked();
     callback forward-clicked();
@@ -157,6 +157,11 @@ export component HeaderBar inherits Rectangle {
             icon: @image-url("icons/view-columns.svg");
             toggled: root.view-mode == 2;
             clicked => { root.view-mode-changed(2); }
+        }
+        IconButton {
+            icon: @image-url("icons/view-treemap.svg");
+            toggled: root.view-mode == 3;
+            clicked => { root.view-mode-changed(3); }
         }
         Rectangle { width: 4px; }
         IconButton {

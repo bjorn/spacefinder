@@ -4,10 +4,11 @@ import { Sidebar, SidebarItem } from "sidebar.slint";
 import { FileListView, FileItem, FileListState } from "file_list.slint";
 import { FileGridView } from "file_grid.slint";
 import { ColumnsView, ColumnCell } from "columns_view.slint";
+import { TreemapView, Tile } from "treemap.slint";
 import { ContextMenu, MenuEntry } from "context_menu.slint";
 import { RenameDialog, NewFolderDialog, ConfirmDialog } from "dialogs.slint";
 
-export { FileListState, ColumnCell }
+export { FileListState, ColumnCell, Tile }
 
 export component MainWindow inherits Window {
     title: "Space";
@@ -28,7 +29,7 @@ export component MainWindow inherits Window {
     in property <bool> can-forward;
     in property <bool> can-up;
     in property <[FileItem]> items;
-    in-out property <int> view-mode: 0;  // 0=list 1=grid 2=columns
+    in-out property <int> view-mode: 0;  // 0=list 1=grid 2=columns 3=treemap
     in property <int> sort-col: 0;
     in property <bool> sort-asc: true;
     in property <string> status-text;
@@ -36,6 +37,8 @@ export component MainWindow inherits Window {
 
     // Icicle columns view state.
     in property <[ColumnCell]> column-cells;
+    // Squarified treemap view state.
+    in property <[Tile]> treemap-tiles;
 
     // Context menu state
     in property <[MenuEntry]> context-entries;
@@ -81,10 +84,15 @@ export component MainWindow inherits Window {
     // Columns view events.
     callback columns-cell-clicked(string);
     callback columns-cell-double-clicked(string, bool, bool);
-    // Right-click on a column cell opens the item context menu at the
-    // given screen-relative position. Path-keyed so the handler can
-    // operate directly on the clicked cell, unlike the list/grid
-    // `item-right-clicked` callback which uses an index into `items`.
+    // Treemap view events.
+    callback treemap-tile-clicked(string);
+    callback treemap-tile-double-clicked(string, bool);
+    // Right-click on a columns cell or treemap tile opens the item
+    // context menu at the given screen-relative position. Path-keyed
+    // so the handler can operate directly on the clicked cell/tile,
+    // unlike the list/grid `item-right-clicked` callback which uses an
+    // index into `items`. Shared between both views; Rust-side
+    // dispatches on `view-mode`.
     callback item-path-right-clicked(string, length, length);
 
     callback key-pressed(string, bool) -> bool;
@@ -178,6 +186,22 @@ export component MainWindow inherits Window {
                         }
                         cell-right-clicked(path, x, y) => {
                             root.item-path-right-clicked(path, x, y);
+                        }
+                    }
+                    if root.view-mode == 3 : TreemapView {
+                        tiles: root.treemap-tiles;
+                        tile-clicked(path) => {
+                            root.treemap-tile-clicked(path);
+                        }
+                        tile-double-clicked(path, is-dir) => {
+                            root.treemap-tile-double-clicked(path, is-dir);
+                        }
+                        tile-right-clicked(path, x, y) => {
+                            root.item-path-right-clicked(path, x, y);
+                        }
+                        background-clicked => { root.background-clicked(); }
+                        background-right-clicked(x, y) => {
+                            root.background-right-clicked(x + parent.absolute-position.x, y + parent.absolute-position.y);
                         }
                     }
 

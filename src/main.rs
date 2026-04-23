@@ -9,6 +9,7 @@ mod fs_scan;
 mod i18n;
 mod icons;
 mod sidebar;
+mod treemap;
 
 use clap::Parser;
 use std::path::PathBuf;

@@ -6,7 +6,8 @@ use crate::fs_scan::{self, Entry, SizeState, SortCol};
 use crate::i18n::{tr, tr_fmt, tr_n_fmt};
 use crate::icons::Icons;
 use crate::sidebar::{self, TRASH_TAG};
-use crate::{ColumnCell, Crumb, FileItem, FileListState, MainWindow, MenuEntry};
+use crate::treemap::{self, Tile as LaidTile};
+use crate::{ColumnCell, Crumb, FileItem, FileListState, MainWindow, MenuEntry, Tile};
 use humansize::{format_size, BINARY};
 use rustc_hash::FxHashSet;
 use slint::{ComponentHandle, Global, Model, ModelRc, SharedString, VecModel};
@@ -67,7 +68,8 @@ pub struct App {
 
     /// Current `view_mode` from the Slint side. Rust is the source of truth
     /// for persistence: we mirror UI changes in here via `set_view_mode`.
-    /// 0 = list, 1 = grid, 2 = columns. Matches `ui/main.slint`.
+    /// 0 = list, 1 = grid, 2 = columns (icicle), 3 = treemap. Matches
+    /// `ui/main.slint`.
     view_mode: i32,
 
     /// Icicle columns view state. Only meaningful while `view_mode == 2`.
@@ -89,6 +91,27 @@ pub struct App {
     /// [`App::handle_key`] to implement arrow-key navigation without
     /// reparsing paths back out of the Slint model.
     column_cells: Vec<LaidCell>,
+
+    /// Squarified treemap view state. Only meaningful while
+    /// `view_mode == 3`. The treemap lays out the direct children of
+    /// `self.current`; drill-down is implemented by navigating into a
+    /// tile, so no separate root field is needed.
+    ///
+    /// `treemap_selected_path` holds the single path a left-click on a
+    /// tile has "selected" for highlighting and right-click context-menu
+    /// targeting. Distinct from `selection` (indices into `filtered`)
+    /// because the treemap's selection semantics are single-tile.
+    treemap_selected_path: Option<PathBuf>,
+    /// Shared Slint model backing the treemap view. Replaced wholesale
+    /// on every [`App::recompute_treemap`] rather than mutated
+    /// row-by-row, because the layout is a single pass and the tile
+    /// count varies.
+    treemap_model: Rc<VecModel<Tile>>,
+    /// Rust-side copy of the currently-laid tiles. Kept in sync with
+    /// `treemap_model` by `recompute_treemap`. Used by
+    /// [`App::handle_key`] to implement arrow-key navigation without
+    /// reparsing paths back out of the Slint model.
+    treemap_tiles: Vec<LaidTile>,
     /// Last-observed window size, in logical pixels. Refreshed on every
     /// `persist()` call so a final `on_close_requested` save catches the
     /// latest dimensions.
@@ -127,6 +150,8 @@ impl App {
         ui.set_items(ModelRc::from(items_model.clone()));
         let columns_model = Rc::new(VecModel::<ColumnCell>::default());
         ui.set_column_cells(ModelRc::from(columns_model.clone()));
+        let treemap_model = Rc::new(VecModel::<Tile>::default());
+        ui.set_treemap_tiles(ModelRc::from(treemap_model.clone()));
 
         // Translate the persisted sort column enum into the controller's
         // runtime enum. Keep the two types decoupled so the on-disk format
@@ -160,6 +185,9 @@ impl App {
             column_selected_path: None,
             columns_model,
             column_cells: Vec::new(),
+            treemap_selected_path: None,
+            treemap_model,
+            treemap_tiles: Vec::new(),
             window_size: cfg.window_size,
             last_save: None,
             save_scheduled: Rc::new(Cell::new(false)),
@@ -315,6 +343,8 @@ impl App {
         self.spawn_size_jobs();
         if self.view_mode == 2 {
             self.recompute_columns();
+        } else if self.view_mode == 3 {
+            self.recompute_treemap();
         }
     }
 
@@ -340,6 +370,24 @@ impl App {
             .collect();
         self.columns_model.set_vec(cells);
         self.column_cells = laid;
+    }
+
+    /// Run the squarified treemap layout against the current directory
+    /// and push the resulting tiles into the Slint `VecModel`. Cheap:
+    /// single-level over direct children, with sub-pixel tiles dropped,
+    /// so the tile count stays bounded.
+    ///
+    /// Layout is produced in fractional coordinates (`x`, `y`, `w`, `h`
+    /// in `[0.0, 1.0]`). The Slint side multiplies by its live inner
+    /// width and height, so a window resize reflows every tile with no
+    /// Rust round-trip. This means the layout does not depend on the
+    /// window size at all.
+    fn recompute_treemap(&mut self) {
+        let laid = treemap::lay_out(&self.current, self.show_hidden);
+        let selected = self.treemap_selected_path.as_deref();
+        let tiles: Vec<Tile> = laid.iter().map(|c| laid_tile_to_ui(c, selected)).collect();
+        self.treemap_model.set_vec(tiles);
+        self.treemap_tiles = laid;
     }
 
     /// Schedule directory-size computation for every directory path
@@ -603,6 +651,10 @@ impl App {
             // Any size update can change a cell's area (or materialize
             // a previously-pending cell). Re-run the layout.
             self.recompute_columns();
+        } else if self.view_mode == 3 {
+            // Same rationale as columns: a size update can change a
+            // tile's area or materialize a pending tile.
+            self.recompute_treemap();
         }
     }
 
@@ -852,9 +904,12 @@ impl App {
         self.selection.clear();
         self.last_clicked = None;
         self.column_selected_path = None;
+        self.treemap_selected_path = None;
         self.refresh();
         // `refresh` handles `recompute_columns`, but column-mode also
         // needs size jobs for the new root so deep descendants settle.
+        // The treemap is single-level, so the direct-child jobs from
+        // `spawn_size_jobs` are enough for it.
         if self.view_mode == 2 {
             self.spawn_columns_size_jobs();
         }
@@ -869,6 +924,7 @@ impl App {
         self.current = self.history[self.history_i].clone();
         self.selection.clear();
         self.column_selected_path = None;
+        self.treemap_selected_path = None;
         self.refresh();
         if self.view_mode == 2 {
             self.spawn_columns_size_jobs();
@@ -884,6 +940,7 @@ impl App {
         self.current = self.history[self.history_i].clone();
         self.selection.clear();
         self.column_selected_path = None;
+        self.treemap_selected_path = None;
         self.refresh();
         if self.view_mode == 2 {
             self.spawn_columns_size_jobs();
@@ -1008,6 +1065,36 @@ impl App {
         }
     }
 
+    /// Treemap counterpart of [`App::refresh_column_selection_display`].
+    /// Same double-click-survival rationale: a full `recompute_treemap`
+    /// rebuild would tear down the `TouchArea` under the pointer, so
+    /// update just the affected tiles via `set_row_data`.
+    fn refresh_treemap_selection_display(&self, prev: Option<&Path>) {
+        let new = self.treemap_selected_path.as_deref();
+        if prev == new {
+            return;
+        }
+        let row_count = self.treemap_model.row_count();
+        for i in 0..row_count {
+            let Some(mut tile) = self.treemap_model.row_data(i) else {
+                continue;
+            };
+            let matches_prev = prev
+                .map(|p| tile.path.as_str() == p.to_string_lossy())
+                .unwrap_or(false);
+            let matches_new = new
+                .map(|p| tile.path.as_str() == p.to_string_lossy())
+                .unwrap_or(false);
+            if matches_prev && !matches_new && tile.selected {
+                tile.selected = false;
+                self.treemap_model.set_row_data(i, tile);
+            } else if matches_new && !tile.selected {
+                tile.selected = true;
+                self.treemap_model.set_row_data(i, tile);
+            }
+        }
+    }
+
     fn double_click(&mut self, idx: usize) {
         if idx >= self.filtered.len() {
             return;
@@ -1024,12 +1111,15 @@ impl App {
     }
 
     fn selected_paths(&self) -> Vec<PathBuf> {
-        // In column mode, the "selection" is the single path the user
-        // last clicked in the icicle view. Context-menu actions (Open,
+        // In column and treemap modes, the "selection" is the single
+        // path the user last clicked. Context-menu actions (Open,
         // Copy, Cut, Rename, Trash, Delete) operate on that path. In
         // list/grid mode, fall back to the index-based selection.
         if self.view_mode == 2 {
             return self.column_selected_path.iter().cloned().collect();
+        }
+        if self.view_mode == 3 {
+            return self.treemap_selected_path.iter().cloned().collect();
         }
         self.selection
             .iter()
@@ -1049,6 +1139,13 @@ impl App {
                 // zoom-out just like a double-click on col-0.
                 let is_root = path == self.current;
                 self.on_column_cell_double_click(path, is_dir, is_root);
+            }
+            return;
+        }
+        if self.view_mode == 3 {
+            if let Some(path) = self.treemap_selected_path.clone() {
+                let is_dir = path.is_dir();
+                self.on_treemap_tile_double_click(path, is_dir);
             }
             return;
         }
@@ -1252,6 +1349,43 @@ impl App {
         ui.set_context_visible(true);
     }
 
+    /// Treemap view: single left-click on a tile selects it
+    /// (highlights only, no navigation). Uses per-row `set_row_data`
+    /// for the same `TouchArea` survival reason documented on
+    /// [`App::on_column_cell_click`].
+    fn on_treemap_tile_click(&mut self, path: PathBuf) {
+        let prev = self.treemap_selected_path.take();
+        self.treemap_selected_path = Some(path);
+        self.refresh_treemap_selection_display(prev.as_deref());
+    }
+
+    /// Treemap view: double left-click. Directories drill in
+    /// (navigate into the subtree); files fall through to the OS
+    /// default-handler, matching list/grid semantics. The treemap has
+    /// no root tile so zoom-out uses the breadcrumb or the up button.
+    fn on_treemap_tile_double_click(&mut self, path: PathBuf, is_dir: bool) {
+        if is_dir {
+            self.navigate(path);
+        } else if let Err(e) = open::that_detached(&path) {
+            log::warn!("open failed: {}", e);
+        }
+    }
+
+    /// Treemap view: right-click on a tile opens the same item-context
+    /// menu as list/grid. The clicked path becomes the treemap
+    /// selection.
+    fn on_treemap_tile_right_click(&mut self, path: PathBuf, x: f32, y: f32) {
+        let prev = self.treemap_selected_path.take();
+        self.treemap_selected_path = Some(path);
+        self.refresh_treemap_selection_display(prev.as_deref());
+        let Some(ui) = self.ui.upgrade() else { return };
+        let entries = item_menu(self);
+        ui.set_context_entries(ModelRc::from(Rc::new(VecModel::from(entries))));
+        ui.set_context_x(x);
+        ui.set_context_y(y);
+        ui.set_context_visible(true);
+    }
+
     fn apply_confirm(&mut self) {
         let action = self.pending_confirm.take();
         match action {
@@ -1309,11 +1443,13 @@ impl App {
     fn toggle_hidden(&mut self) {
         self.show_hidden = !self.show_hidden;
         self.rebuild_view();
-        // Column view does not consume `filtered`; it reads the disk
-        // directly. Recompute its layout so the toggle is reflected
-        // live without needing to leave and re-enter column mode.
+        // Column and treemap views do not consume `filtered`; they
+        // read the disk directly. Recompute their layout so the toggle
+        // is reflected live without needing to leave and re-enter.
         if self.view_mode == 2 {
             self.recompute_columns();
+        } else if self.view_mode == 3 {
+            self.recompute_treemap();
         }
         self.push_ui_state();
         self.persist();
@@ -1348,6 +1484,11 @@ impl App {
             // No separate root to seed; just lay out and warm sizes.
             self.recompute_columns();
             self.spawn_columns_size_jobs();
+        } else if mode == 3 {
+            // Treemap is rooted at `self.current` too. The direct-child
+            // size jobs spawned by `refresh`/`navigate` already cover
+            // what the single-level layout needs; just lay out.
+            self.recompute_treemap();
         }
         self.persist();
     }
@@ -1383,8 +1524,12 @@ impl App {
         if self.view_mode == 2 {
             return self.handle_key_columns(t);
         }
+        // Treemap view: separate 2D nearest-neighbor navigation.
+        if self.view_mode == 3 {
+            return self.handle_key_treemap(t);
+        }
         // Arrow / Home / End / PageUp / PageDown move the focus row inside
-        // the list or grid. Not handled in column view.
+        // the list or grid. Not handled in column/treemap views.
         if self.view_mode != 0 && self.view_mode != 1 {
             return false;
         }
@@ -1587,6 +1732,94 @@ impl App {
         // not interpret it.
         true
     }
+
+    /// Arrow-key navigation inside the treemap view. Picks the nearest
+    /// neighbor tile in the pressed direction, using tile centers and
+    /// a directional filter so moves feel spatial rather than
+    /// list-linear.
+    ///
+    /// If there is no current selection, the first arrow press selects
+    /// the largest tile (index 0 in the sorted layout). If the selected
+    /// path no longer resolves to a visible tile (e.g. after a
+    /// re-layout dropped it), we fall back to the largest.
+    fn handle_key_treemap(&mut self, t: &str) -> bool {
+        let is_up = t == slint::SharedString::from(slint::platform::Key::UpArrow).as_str();
+        let is_down =
+            t == slint::SharedString::from(slint::platform::Key::DownArrow).as_str();
+        let is_left =
+            t == slint::SharedString::from(slint::platform::Key::LeftArrow).as_str();
+        let is_right =
+            t == slint::SharedString::from(slint::platform::Key::RightArrow).as_str();
+        if !(is_up || is_down || is_left || is_right) {
+            return false;
+        }
+        if self.treemap_tiles.is_empty() {
+            return false;
+        }
+
+        let cur_idx: Option<usize> = self.treemap_selected_path.as_ref().and_then(|p| {
+            self.treemap_tiles
+                .iter()
+                .position(|c| c.path.as_path() == p.as_path())
+        });
+        let cur_idx = match cur_idx {
+            Some(i) => i,
+            None => {
+                // Seed to the largest tile and stop; one press = "start here".
+                let first = &self.treemap_tiles[0];
+                let prev = self.treemap_selected_path.take();
+                self.treemap_selected_path = Some(first.path.clone());
+                self.refresh_treemap_selection_display(prev.as_deref());
+                return true;
+            }
+        };
+
+        let cur = &self.treemap_tiles[cur_idx];
+        let cx = cur.x + cur.w * 0.5;
+        let cy = cur.y + cur.h * 0.5;
+
+        // Directional nearest-neighbor: keep candidates whose center
+        // lies in the correct half-plane, then pick by Euclidean
+        // distance to the current tile's center.
+        let target: Option<usize> = self
+            .treemap_tiles
+            .iter()
+            .enumerate()
+            .filter(|(i, _)| *i != cur_idx)
+            .filter(|(_, c)| {
+                let nx = c.x + c.w * 0.5;
+                let ny = c.y + c.h * 0.5;
+                if is_up {
+                    ny < cy
+                } else if is_down {
+                    ny > cy
+                } else if is_left {
+                    nx < cx
+                } else {
+                    nx > cx
+                }
+            })
+            .min_by(|(_, a), (_, b)| {
+                let ax = a.x + a.w * 0.5;
+                let ay = a.y + a.h * 0.5;
+                let bx = b.x + b.w * 0.5;
+                let by = b.y + b.h * 0.5;
+                let da = (ax - cx).powi(2) + (ay - cy).powi(2);
+                let db = (bx - cx).powi(2) + (by - cy).powi(2);
+                da.partial_cmp(&db).unwrap_or(std::cmp::Ordering::Equal)
+            })
+            .map(|(i, _)| i);
+
+        if let Some(i) = target {
+            let new_path = self.treemap_tiles[i].path.clone();
+            if self.treemap_selected_path.as_deref() != Some(new_path.as_path()) {
+                let prev = self.treemap_selected_path.take();
+                self.treemap_selected_path = Some(new_path);
+                self.refresh_treemap_selection_display(prev.as_deref());
+            }
+        }
+        true
+    }
 }
 
 fn lexical(a: &str, b: &str) -> std::cmp::Ordering {
@@ -1686,13 +1919,14 @@ fn sort_col_to_config(c: SortCol) -> config::SortCol {
     }
 }
 
-/// Map the on-disk `config::ViewMode` into the UI integer (0 = list, 1 = grid,
-/// 2 = columns).
+/// Map the on-disk `config::ViewMode` into the UI integer (0 = list,
+/// 1 = grid, 2 = columns, 3 = treemap).
 fn view_mode_from_config(v: config::ViewMode) -> i32 {
     match v {
         config::ViewMode::List => 0,
         config::ViewMode::Grid => 1,
         config::ViewMode::Columns => 2,
+        config::ViewMode::Treemap => 3,
     }
 }
 
@@ -1702,6 +1936,7 @@ fn view_mode_to_config(m: i32) -> config::ViewMode {
     match m {
         1 => config::ViewMode::Grid,
         2 => config::ViewMode::Columns,
+        3 => config::ViewMode::Treemap,
         _ => config::ViewMode::List,
     }
 }
@@ -1735,6 +1970,27 @@ fn laid_cell_to_ui(c: &LaidCell, selected: Option<&Path>) -> ColumnCell {
     }
 }
 
+/// Convert a `treemap::Tile` into the Slint-facing `Tile` struct.
+/// `x`/`y`/`w`/`h` are fractions in `[0.0, 1.0]`; the Slint side
+/// multiplies by the live treemap width/height to produce pixels.
+/// `selected` is set when `c.path` matches the controller's currently
+/// treemap-selected path.
+fn laid_tile_to_ui(c: &LaidTile, selected: Option<&Path>) -> Tile {
+    let is_selected = selected.map(|p| p == c.path.as_path()).unwrap_or(false);
+    Tile {
+        name: c.name.clone().into(),
+        size_text: c.size_text.clone().into(),
+        x: c.x,
+        y: c.y,
+        w: c.w,
+        h: c.h,
+        is_dir: c.is_dir,
+        pending: c.pending,
+        path: c.path.to_string_lossy().to_string().into(),
+        selected: is_selected,
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1756,16 +2012,18 @@ mod tests {
             config::ViewMode::List,
             config::ViewMode::Grid,
             config::ViewMode::Columns,
+            config::ViewMode::Treemap,
         ] {
             assert_eq!(view_mode_to_config(view_mode_from_config(v)), v);
         }
-        // Integer side: 0 is List, 1 is Grid, 2 is Columns; anything
-        // outside that range clamps to List. We match `ui/main.slint`
-        // where `view-mode` is an int with 0 = list, 1 = grid, 2 =
-        // columns.
+        // Integer side: 0 is List, 1 is Grid, 2 is Columns, 3 is
+        // Treemap; anything outside that range clamps to List. We
+        // match `ui/main.slint` where `view-mode` is an int with
+        // 0 = list, 1 = grid, 2 = columns, 3 = treemap.
         assert_eq!(view_mode_to_config(0), config::ViewMode::List);
         assert_eq!(view_mode_to_config(1), config::ViewMode::Grid);
         assert_eq!(view_mode_to_config(2), config::ViewMode::Columns);
+        assert_eq!(view_mode_to_config(3), config::ViewMode::Treemap);
         assert_eq!(view_mode_to_config(-1), config::ViewMode::List);
         assert_eq!(view_mode_to_config(99), config::ViewMode::List);
     }
@@ -2168,9 +2426,31 @@ fn wire_callbacks(ui: &MainWindow, app: Rc<RefCell<App>>) {
     }
     {
         let app = app.clone();
+        ui.on_treemap_tile_clicked(move |path| {
+            let path = PathBuf::from(path.as_str());
+            app.borrow_mut().on_treemap_tile_click(path);
+        });
+    }
+    {
+        let app = app.clone();
+        ui.on_treemap_tile_double_clicked(move |path, is_dir| {
+            let path = PathBuf::from(path.as_str());
+            app.borrow_mut().on_treemap_tile_double_click(path, is_dir);
+        });
+    }
+    {
+        // Path-keyed right-click is shared between the columns and
+        // treemap views. Dispatch on `view_mode` so the right selection
+        // state is updated; both handlers open the same item menu.
+        let app = app.clone();
         ui.on_item_path_right_clicked(move |path, x, y| {
             let path = PathBuf::from(path.as_str());
-            app.borrow_mut().on_column_cell_right_click(path, x, y);
+            let mode = app.borrow().view_mode;
+            if mode == 3 {
+                app.borrow_mut().on_treemap_tile_right_click(path, x, y);
+            } else {
+                app.borrow_mut().on_column_cell_right_click(path, x, y);
+            }
         });
     }
 }

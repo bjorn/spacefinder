@@ -21,6 +21,7 @@ pub enum ViewMode {
     List,
     Grid,
     Columns,
+    Treemap,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, serde::Serialize, serde::Deserialize)]

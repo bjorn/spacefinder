@@ -1,0 +1,126 @@
+import { Theme } from "theme.slint";
+
+export struct Tile {
+    name: string,
+    size-text: string,
+    path: string,
+    is-dir: bool,
+    pending: bool,
+    selected: bool,
+    // Fractional coords in [0, 1], relative to the view's usable area.
+    // Rust computes these; the Slint side multiplies by the live inner
+    // width/height so a window resize reflows with no round-trip.
+    x: float,
+    y: float,
+    w: float,
+    h: float,
+}
+
+export component TreemapView inherits Rectangle {
+    in property <[Tile]> tiles;
+    // Single left-click: select the tile.
+    callback tile-clicked(string);
+    // Double left-click: directories drill down, files open in the OS.
+    callback tile-double-clicked(string, bool);
+    // Right-click: open the context menu at screen-relative (x, y).
+    callback tile-right-clicked(string, length, length);
+    // Clicks on the empty background clear the selection.
+    callback background-clicked();
+    callback background-right-clicked(length, length);
+
+    background: Theme.bg;
+
+    property <length> pad: 4px;
+
+    // Background TouchArea beneath the tiles catches clicks that fall
+    // through gaps or happen on an empty directory. Tiles are declared
+    // after it, so they appear on top and receive their own events
+    // first — matching the file_grid.slint layering convention.
+    bg-touch := TouchArea {
+        pointer-event(ev) => {
+            if (ev.button == PointerEventButton.right && ev.kind == PointerEventKind.down) {
+                root.background-right-clicked(
+                    self.mouse-x + parent.absolute-position.x,
+                    self.mouse-y + parent.absolute-position.y,
+                );
+            }
+        }
+        clicked => { root.background-clicked(); }
+    }
+
+    // The inner rectangle's live width/height is the coordinate system
+    // tiles live inside. Wrapping them like this keeps their
+    // absolutely-positioned children from feeding back into the root's
+    // intrinsic-size inference during the first binding pass.
+    inner := Rectangle {
+        x: root.pad;
+        y: root.pad;
+        width: max(0px, root.width - 2 * root.pad);
+        height: max(0px, root.height - 2 * root.pad);
+
+        for tile in root.tiles : Rectangle {
+            x: tile.x * inner.width;
+            y: tile.y * inner.height;
+            width: max(0px, tile.w * inner.width);
+            height: max(0px, tile.h * inner.height);
+            border-width: 1px;
+            border-color: Theme.divider;
+            border-radius: 2px;
+            background: tile.selected
+                ? Theme.selection-bg
+                : touch.pressed
+                    ? Theme.bg-pressed
+                    : touch.has-hover
+                        ? Theme.bg-hover
+                        : tile.is-dir ? Theme.bg-elevated : Theme.bg-component;
+            clip: true;
+
+            // Subtle inner stroke that sits 1px inside the outer border,
+            // matching the columns view's double-outline look so the
+            // two visualizations stay visually consistent.
+            Rectangle {
+                x: 1px;
+                y: 1px;
+                width: parent.width - 2px;
+                height: parent.height - 2px;
+                border-width: 1px;
+                border-color: Theme.border;
+                border-radius: 1px;
+                background: transparent;
+            }
+
+            Text {
+                x: 4px;
+                y: 2px;
+                width: max(0px, parent.width - 8px);
+                height: max(0px, parent.height - 4px);
+                text: tile.name + (tile.size-text != "" ? "  " + tile.size-text : "");
+                color: tile.pending ? Theme.text-subtle : Theme.text;
+                font-size: 11px;
+                font-weight: tile.is-dir ? 600 : 400;
+                overflow: elide;
+                wrap: no-wrap;
+                vertical-alignment: top;
+            }
+
+            touch := TouchArea {
+                mouse-cursor: pointer;
+                pointer-event(ev) => {
+                    if (ev.button == PointerEventButton.right && ev.kind == PointerEventKind.down) {
+                        root.tile-right-clicked(
+                            tile.path,
+                            self.mouse-x + parent.absolute-position.x,
+                            self.mouse-y + parent.absolute-position.y,
+                        );
+                    }
+                }
+                clicked => {
+                    root.tile-clicked(tile.path);
+                }
+                double-clicked => {
+                    root.tile-double-clicked(tile.path, tile.is-dir);
+                }
+            }
+        }
+    }
+}
