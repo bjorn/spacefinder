@@ -31,7 +31,8 @@ component ListHeader inherits Rectangle {
         background: Theme.divider;
     }
     HorizontalLayout {
-        padding-left: 44px; padding-right: 16px; spacing: 8px;
+        padding-left: 12px; padding-right: 16px; spacing: 8px;
+        Rectangle { width: 20px; }
         Rectangle {
             horizontal-stretch: 3;
             HorizontalLayout {
@@ -44,6 +45,7 @@ component ListHeader inherits Rectangle {
                     font-size: 12px;
                     font-weight: 600;
                     vertical-alignment: center;
+                    overflow: elide;
                 }
                 if root.sort-col == 0 : Text {
                     text: root.sort-asc ? "▲" : "▼";
@@ -65,6 +67,7 @@ component ListHeader inherits Rectangle {
                     font-size: 12px;
                     font-weight: 600;
                     vertical-alignment: center;
+                    overflow: elide;
                 }
                 if root.sort-col == 1 : Text {
                     text: root.sort-asc ? "▲" : "▼";
@@ -92,6 +95,7 @@ component ListHeader inherits Rectangle {
                     font-size: 12px;
                     font-weight: 600;
                     vertical-alignment: center;
+                    overflow: elide;
                 }
             }
             TouchArea { clicked => { root.sort-changed(2); } }
@@ -117,6 +121,7 @@ component ListRow inherits Rectangle {
     HorizontalLayout {
         padding-left: 12px; padding-right: 16px; spacing: 8px;
         VerticalLayout {
+            width: 20px;
             alignment: center;
             Image {
                 source: root.item.icon;
@@ -129,6 +134,7 @@ component ListRow inherits Rectangle {
             horizontal-stretch: 3;
             if !root.editing : Text {
                 x: 4px;
+                width: parent.width - 4px;
                 text: root.item.name;
                 color: root.item.cut ? Theme.text-subtle : Theme.text;
                 vertical-alignment: center;
@@ -146,26 +152,26 @@ component ListRow inherits Rectangle {
         }
         Rectangle {
             horizontal-stretch: 1;
-            HorizontalLayout {
-                alignment: start;
-                Text {
-                    text: root.item.modified-text;
-                    color: Theme.text-muted;
-                    vertical-alignment: center;
-                    font-size: 12px;
-                }
+            Text {
+                width: parent.width;
+                text: root.item.modified-text;
+                color: Theme.text-muted;
+                vertical-alignment: center;
+                horizontal-alignment: left;
+                overflow: elide;
+                font-size: 12px;
             }
         }
         Rectangle {
             horizontal-stretch: 1;
-            HorizontalLayout {
-                alignment: end;
-                Text {
-                    text: root.item.size-text;
-                    color: Theme.text-muted;
-                    vertical-alignment: center;
-                    font-size: 12px;
-                }
+            Text {
+                width: parent.width;
+                text: root.item.size-text;
+                color: Theme.text-muted;
+                vertical-alignment: center;
+                horizontal-alignment: right;
+                overflow: elide;
+                font-size: 12px;
             }
         }
     }
