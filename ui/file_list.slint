@@ -35,6 +35,8 @@ component ListHeader inherits Rectangle {
         Rectangle { width: 20px; }
         Rectangle {
             horizontal-stretch: 3;
+            preferred-width: 0;
+            min-width: 0;
             HorizontalLayout {
                 padding-left: 4px;
                 alignment: start;
@@ -57,7 +59,9 @@ component ListHeader inherits Rectangle {
             TouchArea { clicked => { root.sort-changed(0); } }
         }
         Rectangle {
-            width: 160px;
+            horizontal-stretch: 1;
+            preferred-width: 0;
+            min-width: 0;
             HorizontalLayout {
                 alignment: end;
                 spacing: 4px;
@@ -79,7 +83,9 @@ component ListHeader inherits Rectangle {
             TouchArea { clicked => { root.sort-changed(1); } }
         }
         if root.show-size : Rectangle {
-            width: 90px;
+            horizontal-stretch: 1;
+            preferred-width: 0;
+            min-width: 0;
             HorizontalLayout {
                 alignment: end;
                 spacing: 4px;
@@ -132,6 +138,8 @@ component ListRow inherits Rectangle {
         }
         Rectangle {
             horizontal-stretch: 3;
+            preferred-width: 0;
+            min-width: 0;
             if !root.editing : Text {
                 x: 4px;
                 width: parent.width - 4px;
@@ -151,7 +159,9 @@ component ListRow inherits Rectangle {
             }
         }
         Rectangle {
-            width: 160px;
+            horizontal-stretch: 1;
+            preferred-width: 0;
+            min-width: 0;
             Text {
                 width: parent.width;
                 text: root.item.modified-text;
@@ -163,7 +173,9 @@ component ListRow inherits Rectangle {
             }
         }
         Rectangle {
-            width: 90px;
+            horizontal-stretch: 1;
+            preferred-width: 0;
+            min-width: 0;
             Text {
                 width: parent.width;
                 text: root.item.size-text;
