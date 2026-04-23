@@ -4,6 +4,7 @@ export struct SidebarItem {
     label: string,
     icon: image,
     path: string,
+    size: string,
     is-separator: bool,
     is-header: bool,
 }
@@ -40,6 +41,15 @@ component SidebarRow inherits Rectangle {
             vertical-alignment: center;
             font-size: 13px;
             horizontal-stretch: 1;
+            overflow: elide;
+        }
+        Text {
+            text: entry.size;
+            color: Theme.text-muted;
+            vertical-alignment: center;
+            horizontal-alignment: right;
+            font-size: 12px;
+            overflow: elide;
         }
     }
 
