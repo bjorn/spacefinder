@@ -172,9 +172,14 @@ impl App {
         let sidebar_model = Rc::new(VecModel::from(sidebar_items));
         ui.set_sidebar_items(ModelRc::from(sidebar_model));
 
-        // Fill in the recursive used-space totals for each Places entry on a
-        // background thread; they trickle in via `set_row_data`.
-        sidebar::spawn_places_size_worker(ui.as_weak(), places_to_size);
+        // Fill in the recursive used-space totals for each Places entry via
+        // the shared SizeEngine, so cache + on-disk-byte semantics match the
+        // file/grid/columns views.
+        sidebar::spawn_places_size_jobs(
+            app.borrow().size_engine.clone(),
+            ui.as_weak(),
+            places_to_size,
+        );
 
         wire_callbacks(ui, app.clone());
         {

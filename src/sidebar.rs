@@ -1,10 +1,14 @@
+use crate::dir_size::SizeEngine;
 use crate::disk;
+use crate::fs_scan::SizeState;
 use crate::i18n::tr;
 use crate::icons::Icons;
 use crate::{MainWindow, SidebarItem};
 use humansize::{format_size, BINARY};
+use rustc_hash::FxHashMap;
 use slint::{Model, SharedString};
 use std::path::{Path, PathBuf};
+use std::sync::Arc;
 
 pub const TRASH_TAG: &str = "__trash__";
 
@@ -87,7 +91,7 @@ fn separator() -> SidebarItem {
 
 fn drive(label: &str, icon: slint::Image, path: &Path) -> SidebarItem {
     let size = disk::free_and_total(path)
-        .map(|(avail, _total)| format_size(avail, BINARY))
+        .map(|(avail, _total)| format!("{} free", format_size(avail, BINARY)))
         .unwrap_or_default();
     SidebarItem {
         label: label.into(),
@@ -118,84 +122,45 @@ fn push_place(
     to_size.push((idx, path.to_path_buf()));
 }
 
-/// Kick off a single background worker that walks each Places directory
-/// sequentially and posts its total used size back to the UI thread.
-///
-/// Sequential (rather than one thread per entry) so the OS page cache is
-/// warmed in order and we don't oversubscribe the disk on cold starts;
-/// each entry is on the order of seconds for a populated `~`. Results are
-/// marshalled back via `Weak::upgrade_in_event_loop` and applied with
-/// `set_row_data` on the existing sidebar model — no whole-model rebuild,
-/// so scroll/selection are preserved.
-pub fn spawn_places_size_worker(
+/// Schedule a recursive-size computation for every Places entry through the
+/// shared [`SizeEngine`]. Cache hits flow back synchronously; misses spawn
+/// onto the engine's thread pool. The walker emits progress for every
+/// directory it visits, but the per-target callback only forwards the one
+/// path it cares about, so deep descendants just warm the shared cache.
+pub fn spawn_places_size_jobs(
+    engine: Arc<SizeEngine>,
     ui: slint::Weak<MainWindow>,
     targets: Vec<(usize, PathBuf)>,
 ) {
-    if targets.is_empty() {
-        return;
-    }
-    std::thread::Builder::new()
-        .name("space-places-size".into())
-        .spawn(move || {
-            for (idx, path) in targets {
-                // Stop early if the UI has gone away.
-                if ui.upgrade_in_event_loop(|_| {}).is_err() {
+    for (idx, path) in targets {
+        // Pre-resolve canonical form so the worker-side comparison matches
+        // whatever the walker reports (the engine canonicalizes its root).
+        let mut keys: FxHashMap<PathBuf, ()> = FxHashMap::default();
+        keys.insert(path.clone(), ());
+        if let Ok(canon) = std::fs::canonicalize(&path) {
+            keys.insert(canon, ());
+        }
+        let keys = Arc::new(keys);
+
+        let ui_for_cb = ui.clone();
+        let on_progress: crate::dir_size::ProgressFn =
+            Box::new(move |reported: &Path, state: SizeState| {
+                if !keys.contains_key(reported) {
                     return;
                 }
-                let bytes = match dir_used_bytes(&path) {
-                    Some(b) => b,
-                    None => continue,
+                let formatted = match state {
+                    SizeState::Known(n) => format_size(n, BINARY),
+                    SizeState::Unknown => String::new(),
+                    SizeState::Calculating => return,
                 };
-                let formatted = format_size(bytes, BINARY);
-                let _ = ui.upgrade_in_event_loop(move |ui| {
+                let _ = ui_for_cb.upgrade_in_event_loop(move |ui| {
                     let model = ui.get_sidebar_items();
                     if let Some(mut row) = model.row_data(idx) {
                         row.size = formatted.into();
                         model.set_row_data(idx, row);
                     }
                 });
-            }
-        })
-        .expect("spawn places-size worker");
-}
-
-/// Recursive sum of file sizes under `root`, equivalent to `du -sb`:
-///   - uses `symlink_metadata` so symlinks are not followed
-///   - stays on the starting filesystem (`dev` boundary)
-///   - silently skips entries we cannot read
-fn dir_used_bytes(root: &Path) -> Option<u64> {
-    use std::os::unix::fs::MetadataExt;
-
-    let root_meta = std::fs::symlink_metadata(root).ok()?;
-    let root_dev = root_meta.dev();
-    let mut total: u64 = 0;
-    let mut stack: Vec<PathBuf> = vec![root.to_path_buf()];
-    while let Some(dir) = stack.pop() {
-        let Ok(reader) = std::fs::read_dir(&dir) else {
-            continue;
-        };
-        for entry in reader.flatten() {
-            let Ok(meta) = entry.metadata() else {
-                continue;
-            };
-            // Skip anything on a different filesystem (mountpoints, fuse
-            // mounts, etc.). `du -xb` style — and matters because $HOME
-            // can contain mounted GVfs/FUSE trees that block on stat.
-            if meta.dev() != root_dev {
-                continue;
-            }
-            let ft = entry.file_type().ok();
-            // Don't follow symlinks; just skip them (du -sb doesn't add
-            // the symlink's own size into the total either).
-            if ft.map(|t| t.is_symlink()).unwrap_or(false) {
-                continue;
-            }
-            if meta.is_dir() {
-                stack.push(entry.path());
-            } else if meta.is_file() {
-                total = total.saturating_add(meta.len());
-            }
-        }
+            });
+        engine.compute(path, 0, on_progress);
     }
-    Some(total)
 }
