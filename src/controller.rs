@@ -122,7 +122,7 @@ enum ConfirmAction {
 impl App {
     pub fn new(ui: &MainWindow, start: PathBuf, cfg: Config) -> Rc<RefCell<Self>> {
         let icons = Icons::new();
-        let sidebar_items = sidebar::build(&icons);
+        let sidebar::Built { items: sidebar_items, places_to_size } = sidebar::build(&icons);
         let items_model = Rc::new(VecModel::<FileItem>::default());
         ui.set_items(ModelRc::from(items_model.clone()));
         let columns_model = Rc::new(VecModel::<ColumnCell>::default());
@@ -171,6 +171,10 @@ impl App {
 
         let sidebar_model = Rc::new(VecModel::from(sidebar_items));
         ui.set_sidebar_items(ModelRc::from(sidebar_model));
+
+        // Fill in the recursive used-space totals for each Places entry on a
+        // background thread; they trickle in via `set_row_data`.
+        sidebar::spawn_places_size_worker(ui.as_weak(), places_to_size);
 
         wire_callbacks(ui, app.clone());
         {
