@@ -32,12 +32,13 @@
 
 use jwalk::rayon::{ThreadPool, ThreadPoolBuilder};
 use jwalk::{Parallelism, WalkDirGeneric};
-use rustc_hash::FxHashMap;
+use rustc_hash::{FxHashMap, FxHashSet};
+use std::os::unix::fs::MetadataExt;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, LazyLock, Mutex};
 use std::time::SystemTime;
 
-use crate::fs_scan::SizeState;
+use crate::fs_scan::{on_disk_bytes, SizeState};
 
 type CacheKey = (PathBuf, SystemTime);
 
@@ -138,6 +139,11 @@ fn walk_and_aggregate(
     let mut dir_children: FxHashMap<PathBuf, Vec<PathBuf>> = FxHashMap::default();
     // Dirs we failed to read completely. Their size is Unknown.
     let mut dir_errors: FxHashMap<PathBuf, ()> = FxHashMap::default();
+    // Hardlinked files (nlink > 1) are counted the first time we see their
+    // inode in this walk — matching `du`'s default. Without this, container
+    // overlay storage inflates several-fold: podman layers share files across
+    // `diff/` trees via hardlinks, so the same inode gets summed many times.
+    let mut seen_inodes: FxHashSet<(u64, u64)> = FxHashSet::default();
 
     // Seed the root so it appears in outputs even when empty.
     match std::fs::metadata(&canon_root) {
@@ -186,13 +192,18 @@ fn walk_and_aggregate(
                         dir_errors.insert(path, ());
                     }
                 } else if entry.file_type.is_file() {
-                    // Add the file's size to its parent's direct-file sum.
-                    // Symlinks (file_type.is_symlink()) are intentionally
-                    // skipped: we do not follow them and we do not count
-                    // the symlink's own size.
+                    // Add the file's on-disk size to its parent's direct-file
+                    // sum. Symlinks (file_type.is_symlink()) are intentionally
+                    // skipped: we do not follow them and we do not count the
+                    // symlink's own size.
                     if let Ok(meta) = entry.metadata() {
+                        // Dedupe hardlinks so each inode is counted once per walk.
+                        if meta.nlink() > 1 && !seen_inodes.insert((meta.dev(), meta.ino())) {
+                            continue;
+                        }
+                        let bytes = on_disk_bytes(&meta);
                         if let Some(info) = dir_info.get_mut(&parent) {
-                            info.1 = info.1.saturating_add(meta.len());
+                            info.1 = info.1.saturating_add(bytes);
                         } else {
                             // Parent not yet registered (root's direct files):
                             // ensure the parent exists.
@@ -200,7 +211,7 @@ fn walk_and_aggregate(
                                 .ok()
                                 .and_then(|m| m.modified().ok())
                                 .unwrap_or(SystemTime::UNIX_EPOCH);
-                            dir_info.insert(parent.clone(), (parent_mtime, meta.len()));
+                            dir_info.insert(parent.clone(), (parent_mtime, bytes));
                         }
                     }
                 }
@@ -266,7 +277,10 @@ mod tests {
     ///       inner/
     ///         c.bin (4000 bytes)
     ///
-    /// Total bytes: 7000.
+    /// The expected total is summed from the files' actual on-disk block
+    /// counts after creation: the engine reports `blocks*512`, which depends
+    /// on cluster size and filesystem compression, so a hard-coded logical
+    /// total would flake across filesystems.
     fn make_fixture() -> (PathBuf, u64) {
         let nanos = SystemTime::now()
             .duration_since(SystemTime::UNIX_EPOCH)
@@ -275,10 +289,14 @@ mod tests {
         let pid = std::process::id();
         let root = std::env::temp_dir().join(format!("space-dir-size-{}-{}", pid, nanos));
         std::fs::create_dir_all(root.join("sub/inner")).unwrap();
-        std::fs::write(root.join("a.bin"), vec![0u8; 1000]).unwrap();
-        std::fs::write(root.join("sub/b.bin"), vec![0u8; 2000]).unwrap();
-        std::fs::write(root.join("sub/inner/c.bin"), vec![0u8; 4000]).unwrap();
-        (root, 7000)
+        let files = [("a.bin", 1000usize), ("sub/b.bin", 2000), ("sub/inner/c.bin", 4000)];
+        let mut expected: u64 = 0;
+        for (rel, len) in files {
+            let p = root.join(rel);
+            std::fs::write(&p, vec![0u8; len]).unwrap();
+            expected = expected.saturating_add(on_disk_bytes(&std::fs::metadata(&p).unwrap()));
+        }
+        (root, expected)
     }
 
     /// Cold run walks the tree, warm run must hit the cache and still report
@@ -429,6 +447,58 @@ mod tests {
         );
 
         let _ = std::fs::remove_dir_all(&root);
+    }
+
+    /// Hardlinked files must be counted once per walk, matching `du`'s default.
+    /// Container overlay storage hardlinks shared files across layer dirs; without
+    /// this, reported sizes balloon (the motivating case: a 480 MiB podman layer
+    /// that reported 2.65 GiB).
+    #[test]
+    fn hardlinks_counted_once_per_walk() {
+        let nanos = SystemTime::now()
+            .duration_since(SystemTime::UNIX_EPOCH)
+            .map(|d| d.as_nanos())
+            .unwrap_or(0);
+        let root = std::env::temp_dir().join(format!(
+            "space-dir-size-hardlink-{}-{}",
+            std::process::id(),
+            nanos
+        ));
+        std::fs::create_dir_all(root.join("layer_a")).unwrap();
+        std::fs::create_dir_all(root.join("layer_b")).unwrap();
+        let original = root.join("layer_a/big.bin");
+        std::fs::write(&original, vec![0u8; 10_000]).unwrap();
+        std::fs::hard_link(&original, root.join("layer_b/big.bin")).unwrap();
+
+        let expected = on_disk_bytes(&std::fs::metadata(&original).unwrap());
+        let engine = SizeEngine::new();
+        let run = run_once(&engine, &root, 1);
+        assert_eq!(
+            run.root_total,
+            Some(expected),
+            "hardlinked inode must be counted once, not once per link"
+        );
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    /// Ad-hoc probe against a real path:
+    /// `SPACE_PROBE=/some/dir cargo test --release -- --nocapture --ignored size_probe`
+    #[test]
+    #[ignore]
+    fn size_probe() {
+        let Ok(path) = std::env::var("SPACE_PROBE") else {
+            eprintln!("set SPACE_PROBE=<dir> to run this probe");
+            return;
+        };
+        let engine = SizeEngine::new();
+        let run = run_once(&engine, Path::new(&path), 1);
+        eprintln!(
+            "PROBE {}: total={} bytes, dirs_seen={}, elapsed={:?}",
+            path,
+            run.root_total.map(|n| n.to_string()).unwrap_or_else(|| "UNKNOWN".into()),
+            run.dirs_seen,
+            run.elapsed,
+        );
     }
 
     /// `cargo test --release -- --nocapture --ignored bench_home_cold_then_warm`

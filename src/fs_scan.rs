@@ -1,8 +1,20 @@
 use chrono::{DateTime, Local};
 use humansize::{format_size, BINARY};
 use std::fs;
+use std::os::unix::fs::MetadataExt;
 use std::path::{Path, PathBuf};
 use std::time::SystemTime;
+
+/// Bytes this file consumes on disk. Matches `du` (counts allocated 512-byte
+/// blocks, the `st_blocks` field) rather than `ls -l` (the declared length).
+///
+/// For a disk-cleanup tool the on-disk figure is what actually matters:
+///   * sparse files declare more than they allocate (VM images, some logs);
+///   * filesystem compression (BTRFS, ZFS) shrinks allocated bytes;
+///   * tiny files still occupy a whole cluster.
+pub fn on_disk_bytes(meta: &fs::Metadata) -> u64 {
+    meta.blocks().saturating_mul(512)
+}
 
 /// State of a directory-size computation for an `Entry`.
 ///
@@ -25,10 +37,11 @@ pub struct Entry {
     pub name: String,
     pub path: PathBuf,
     pub is_dir: bool,
-    /// File size in bytes (from direntry metadata).
+    /// On-disk size in bytes (allocated blocks × 512).
     ///
     /// For directories this stays at 0 and the authoritative value lives in
-    /// `size_state`. For files it equals `meta.len()`.
+    /// `size_state`. For files it is `on_disk_bytes(&meta)` — matching `du`,
+    /// not `ls -l`.
     pub size: u64,
     /// For directories, this tracks the recursive size computation. For
     /// files it is always `Known(size)`.
@@ -76,7 +89,7 @@ pub fn scan(dir: &Path) -> std::io::Result<Vec<Entry>> {
         let hidden = name.starts_with('.');
         let Ok(meta) = entry.metadata() else { continue };
         let is_dir = meta.is_dir();
-        let size = if is_dir { 0 } else { meta.len() };
+        let size = if is_dir { 0 } else { on_disk_bytes(&meta) };
         let size_state = if is_dir {
             SizeState::Calculating
         } else {

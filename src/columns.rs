@@ -103,7 +103,7 @@ fn read_children(parent: &Path, show_hidden: bool) -> Vec<RawChild> {
                 None => (0, true),
             }
         } else {
-            (meta.len(), false)
+            (crate::fs_scan::on_disk_bytes(&meta), false)
         };
         out.push(RawChild {
             name,
