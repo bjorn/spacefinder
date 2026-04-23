@@ -715,9 +715,17 @@ impl App {
         ui.set_can_back(self.history_i > 0);
         ui.set_can_forward(self.history_i + 1 < self.history.len());
         ui.set_can_up(self.current.parent().is_some());
-        ui.set_sidebar_active_path(
-            self.current.to_string_lossy().to_string().into(),
-        );
+        // When viewing the trash dir, surface the Trash sidebar entry as
+        // active by reporting its sentinel path rather than the real one.
+        let active = if dirs::home_dir()
+            .map(|h| self.current == h.join(".local/share/Trash/files"))
+            .unwrap_or(false)
+        {
+            TRASH_TAG.to_string()
+        } else {
+            self.current.to_string_lossy().to_string()
+        };
+        ui.set_sidebar_active_path(active.into());
         ui.set_sort_col(match self.sort_col {
             SortCol::Name => 0,
             SortCol::Modified => 1,
