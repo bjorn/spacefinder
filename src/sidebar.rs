@@ -1,8 +1,10 @@
+use crate::disk;
 use crate::i18n::tr;
 use crate::icons::Icons;
 use crate::SidebarItem;
+use humansize::{format_size, BINARY};
 use slint::SharedString;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 pub const TRASH_TAG: &str = "__trash__";
 
@@ -37,12 +39,13 @@ pub fn build(icons: &Icons) -> Vec<SidebarItem> {
         label: tr("Trash").into(),
         icon: icons.trash(),
         path: TRASH_TAG.into(),
+        size: SharedString::default(),
         is_separator: false,
         is_header: false,
     });
 
     push_header(&mut items, &tr("Drives"));
-    items.push(item(&tr("Root"), icons.drive(), &PathBuf::from("/")));
+    items.push(drive(&tr("Root"), icons.drive(), &PathBuf::from("/")));
 
     items
 }
@@ -52,6 +55,7 @@ fn push_header(items: &mut Vec<SidebarItem>, label: &str) {
         label: label.into(),
         icon: slint::Image::default(),
         path: SharedString::default(),
+        size: SharedString::default(),
         is_separator: false,
         is_header: true,
     });
@@ -62,16 +66,32 @@ fn separator() -> SidebarItem {
         label: SharedString::default(),
         icon: slint::Image::default(),
         path: SharedString::default(),
+        size: SharedString::default(),
         is_separator: true,
         is_header: false,
     }
 }
 
-fn item(label: &str, icon: slint::Image, path: &std::path::Path) -> SidebarItem {
+fn item(label: &str, icon: slint::Image, path: &Path) -> SidebarItem {
     SidebarItem {
         label: label.into(),
         icon,
         path: path.to_string_lossy().to_string().into(),
+        size: SharedString::default(),
+        is_separator: false,
+        is_header: false,
+    }
+}
+
+fn drive(label: &str, icon: slint::Image, path: &Path) -> SidebarItem {
+    let size = disk::free_and_total(path)
+        .map(|(avail, _total)| format_size(avail, BINARY))
+        .unwrap_or_default();
+    SidebarItem {
+        label: label.into(),
+        icon,
+        path: path.to_string_lossy().to_string().into(),
+        size: size.into(),
         is_separator: false,
         is_header: false,
     }
