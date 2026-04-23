@@ -25,7 +25,6 @@ component SidebarRow inherits Rectangle {
         padding-left: 10px;
         padding-right: 10px;
         spacing: 10px;
-        alignment: start;
         VerticalLayout {
             alignment: center;
             Image {
@@ -40,7 +39,6 @@ component SidebarRow inherits Rectangle {
             color: Theme.text;
             vertical-alignment: center;
             font-size: 13px;
-            horizontal-stretch: 1;
             overflow: elide;
         }
         Text {
@@ -50,6 +48,9 @@ component SidebarRow inherits Rectangle {
             horizontal-alignment: right;
             font-size: 12px;
             overflow: elide;
+            horizontal-stretch: 1;
+            preferred-width: 0;
+            min-width: 0;
         }
     }
 

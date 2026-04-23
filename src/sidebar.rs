@@ -52,14 +52,23 @@ pub fn build(icons: &Icons) -> Built {
         push_place(&mut items, &mut places_to_size, &tr("Videos"), icons.folder(), &p);
     }
     items.push(separator());
+    let trash_idx = items.len();
+    let trash_files = home.as_ref().map(|h| h.join(".local/share/Trash/files"));
     items.push(SidebarItem {
         label: tr("Trash").into(),
         icon: icons.trash(),
         path: TRASH_TAG.into(),
-        size: SharedString::default(),
+        size: trash_files
+            .as_ref()
+            .filter(|p| p.exists())
+            .map(|_| PENDING_SIZE.into())
+            .unwrap_or_default(),
         is_separator: false,
         is_header: false,
     });
+    if let Some(p) = trash_files.filter(|p| p.exists()) {
+        places_to_size.push((trash_idx, p));
+    }
 
     push_header(&mut items, &tr("Drives"));
     items.push(drive(&tr("Root"), icons.drive(), &PathBuf::from("/")));
