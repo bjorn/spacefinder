@@ -12,7 +12,7 @@ tokio = { version = "1", features = ["rt-multi-thread", "macros", "fs", "sync", 
 walkdir = "2.5"
 trash = { git = "https://github.com/jackpot51/trash-rs.git", branch = "cosmic" }
 dirs = "6.0"
-freedesktop-icons = "0.3"
+freedesktop-icons = "0.4"
 xdg-mime = { git = "https://github.com/ebassi/xdg-mime-rs" }
 mime_guess = "2"
 arboard = { version = "3", default-features = false, features = ["wayland-data-control"] }
