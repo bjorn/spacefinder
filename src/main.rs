@@ -10,7 +10,30 @@ mod i18n;
 mod icons;
 mod sidebar;
 
+use clap::Parser;
+use std::path::PathBuf;
+
+/// CLI surface. `--help` and `--version` are auto-wired by clap.
+#[derive(Parser)]
+#[command(name = "space", version, about, long_about = None)]
+struct Cli {
+    /// Directory to open. Defaults to the last-opened directory, or the home
+    /// directory on first run.
+    #[arg(value_parser = parse_dir)]
+    path: Option<PathBuf>,
+}
+
+fn parse_dir(s: &str) -> Result<PathBuf, String> {
+    let p = PathBuf::from(s);
+    if !p.is_dir() {
+        return Err(format!("'{s}' is not a directory"));
+    }
+    Ok(p)
+}
+
 fn main() -> Result<(), Box<dyn std::error::Error>> {
+    let cli = Cli::parse();
+
     env_logger::Builder::from_env(
         env_logger::Env::default().default_filter_or("space=info,warn"),
     )
@@ -42,15 +65,14 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         .window()
         .set_size(slint::LogicalSize::new(win_w as f32, win_h as f32));
 
-    // Pick the initial directory. Prefer the last-seen location if it still
-    // exists, otherwise fall back to the user's home directory, and finally
-    // the filesystem root so the app can at least launch.
-    let start = cfg
-        .last_location
-        .clone()
-        .filter(|p| p.is_dir())
+    // Pick the initial directory. CLI path wins if provided; otherwise prefer
+    // the last-seen location, fall back to $HOME, and finally to `/` so the
+    // app can at least launch.
+    let start = cli
+        .path
+        .or_else(|| cfg.last_location.clone().filter(|p| p.is_dir()))
         .or_else(dirs::home_dir)
-        .unwrap_or_else(|| std::path::PathBuf::from("/"));
+        .unwrap_or_else(|| PathBuf::from("/"));
 
     let _app = controller::App::new(&window, start, cfg);
     window.run()?;
