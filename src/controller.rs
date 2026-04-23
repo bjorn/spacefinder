@@ -717,10 +717,7 @@ impl App {
         ui.set_can_up(self.current.parent().is_some());
         // When viewing the trash dir, surface the Trash sidebar entry as
         // active by reporting its sentinel path rather than the real one.
-        let active = if dirs::home_dir()
-            .map(|h| self.current == h.join(".local/share/Trash/files"))
-            .unwrap_or(false)
-        {
+        let active = if self.is_viewing_trash() {
             TRASH_TAG.to_string()
         } else {
             self.current.to_string_lossy().to_string()
@@ -1122,7 +1119,22 @@ impl App {
         ui.set_rename_shown(true);
     }
 
+    /// True when the user is currently browsing the trash directory itself.
+    /// Actions that would move selected items into the trash don't make sense
+    /// here (the `trash` crate would just rename them with a `.N` suffix).
+    fn is_viewing_trash(&self) -> bool {
+        dirs::home_dir()
+            .map(|h| self.current == h.join(".local/share/Trash/files"))
+            .unwrap_or(false)
+    }
+
     fn ctx_delete_to_trash(&mut self) {
+        // Triggered by both the context menu and the Delete key. The menu
+        // entry is disabled when viewing trash, but the shortcut still fires;
+        // guard here so both paths no-op.
+        if self.is_viewing_trash() {
+            return;
+        }
         let paths = self.selected_paths();
         if paths.is_empty() {
             return;
@@ -2183,6 +2195,7 @@ fn menu_separator() -> MenuEntry {
 
 fn item_menu(a: &App) -> Vec<MenuEntry> {
     let can_paste = a.clipboard_op.is_some();
+    let can_trash = !a.is_viewing_trash();
     vec![
         menu_entry(&tr("Open"), "open", "Enter"),
         menu_separator(),
@@ -2198,7 +2211,13 @@ fn item_menu(a: &App) -> Vec<MenuEntry> {
         menu_entry(&tr("Copy path"), "copy-path", ""),
         menu_separator(),
         menu_entry(&tr("Rename"), "rename", "F2"),
-        menu_entry(&tr("Move to trash"), "trash", "Delete"),
+        MenuEntry {
+            label: tr("Move to trash").into(),
+            action: "trash".into(),
+            shortcut: "Delete".into(),
+            separator: false,
+            enabled: can_trash,
+        },
         menu_entry(&tr("Delete permanently"), "delete", "Shift+Delete"),
     ]
 }
