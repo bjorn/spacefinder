@@ -67,17 +67,6 @@ export component TreemapView inherits Rectangle {
             y: tile.y * inner.height;
             width: max(0px, tile.w * inner.width);
             height: max(0px, tile.h * inner.height);
-            border-width: 1px;
-            border-color: Theme.divider;
-            border-radius: 2px;
-            background: tile.selected
-                ? Theme.selection-bg
-                : touch.pressed
-                    ? Theme.bg-pressed
-                    : touch.has-hover
-                        ? Theme.bg-hover
-                        : tile.is-dir ? Theme.bg-elevated : Theme.bg-component;
-            clip: true;
 
             // Subtle inner stroke that sits 1px inside the outer border,
             // matching the columns view's double-outline look so the
@@ -85,19 +74,25 @@ export component TreemapView inherits Rectangle {
             Rectangle {
                 x: 1px;
                 y: 1px;
-                width: parent.width - 2px;
-                height: parent.height - 2px;
-                border-width: 1px;
+                width: parent.width - 3px;
+                height: parent.height - 3px;
+                border-width: 1.5px;
                 border-color: Theme.border;
-                border-radius: 1px;
-                background: transparent;
+                border-radius: 2px;
+                background: tile.selected
+                    ? Theme.selection-bg
+                    : touch.pressed
+                        ? Theme.bg-pressed
+                        : touch.has-hover
+                            ? Theme.bg-hover
+                            : tile.is-dir ? Theme.bg-elevated : Theme.bg-component;
             }
 
             Text {
-                x: 4px;
-                y: 2px;
-                width: max(0px, parent.width - 8px);
-                height: max(0px, parent.height - 4px);
+                x: 6px;
+                y: 3px;
+                width: max(0px, parent.width - 12px);
+                height: max(0px, parent.height - 6px);
                 text: tile.name + (tile.size-text != "" ? "  " + tile.size-text : "");
                 color: tile.pending ? Theme.text-subtle : Theme.text;
                 font-size: 11px;

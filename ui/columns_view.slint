@@ -46,36 +46,31 @@ export component ColumnsView inherits Rectangle {
             y: root.h-pad + cell.y-start * inner.height;
             width: root.col-w;
             height: max(0px, (cell.y-end - cell.y-start) * inner.height);
-            border-width: 1px;
-            border-color: Theme.divider;
-            border-radius: 2px;
-            background: cell.selected
-                ? Theme.selection-bg
-                : touch.pressed
-                    ? Theme.bg-pressed
-                    : touch.has-hover
-                        ? Theme.bg-hover
-                        : cell.is-dir ? Theme.bg-elevated : Theme.bg-component;
-            clip: true;
 
             // Subtle inner stroke that sits 1px inside the outer border,
             // making vertically-stacked cells visually more distinct.
             Rectangle {
                 x: 1px;
                 y: 1px;
-                width: parent.width - 2px;
-                height: parent.height - 2px;
-                border-width: 1px;
+                width: parent.width - 3px;
+                height: parent.height - 3px;
+                border-width: 1.5px;
                 border-color: Theme.border;
-                border-radius: 1px;
-                background: transparent;
+                border-radius: 2px;
+                background: cell.selected
+                    ? Theme.selection-bg
+                    : touch.pressed
+                        ? Theme.bg-pressed
+                        : touch.has-hover
+                            ? Theme.bg-hover
+                            : cell.is-dir ? Theme.bg-elevated : Theme.bg-component;
             }
 
             Text {
-                x: 4px;
-                y: 2px;
-                width: parent.width - 8px;
-                height: parent.height - 4px;
+                x: 6px;
+                y: 3px;
+                width: max(0px, parent.width - 12px);
+                height: max(0px, parent.height - 6px);
                 text: cell.name + (cell.size-text != "" ? "  " + cell.size-text : "");
                 color: cell.pending ? Theme.text-subtle : Theme.text;
                 font-size: 11px;
