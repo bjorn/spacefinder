@@ -595,6 +595,12 @@ impl App {
             if !entry.is_dir {
                 continue;
             }
+            // Already settled by the synchronous cache backfill in
+            // `refresh()`; re-running the engine would just round-trip
+            // the same value through the event loop.
+            if matches!(entry.size_state, SizeState::Known(_)) {
+                continue;
+            }
             let dir = entry.path.clone();
             let ui_for_cb = ui.clone();
             let visible = visible.clone();
