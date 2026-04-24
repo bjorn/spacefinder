@@ -12,13 +12,16 @@ delete to free up disk?**
 
 - **Recursive directory sizes.** A parallel `jwalk` walker fills a shared
   cache in the background. The UI stays responsive during the cold pass.
-- **Three views of the same data.**
+- **Four views of the same data.**
   - List with sortable columns (name, modified, size) and stable fallback
     for unknown sizes.
   - Grid of tile icons that reflows to window width.
   - Hierarchical **icicle columns** view: each column is one directory
     depth, with cells sized proportionally to byte totals. Click a folder
     to zoom in, click the root block to zoom out.
+  - **Squarified treemap** of the current directory's direct children,
+    sized proportionally to on-disk bytes. Double-click a tile to drill
+    down; the breadcrumb and up button zoom back out.
 - **Selection + standard actions.** Click / ctrl-click / shift-click,
   context menu (cut, copy, paste, copy path, rename, move to trash,
   delete permanently), keyboard shortcuts.
@@ -33,9 +36,9 @@ delete to free up disk?**
 ## What it is not (yet)
 
 See [TODO.md](TODO.md) for the roadmap. Short version: age/last-used
-column, filter bar, aggregate summary header, treemap view, duplicate
-detection, cleanup presets in the sidebar, per-MIME async icons,
-thumbnails, batch operations with undo, watcher-based auto-refresh.
+column, filter bar, aggregate summary header, duplicate detection,
+cleanup presets in the sidebar, per-MIME async icons, thumbnails, batch
+operations with undo, watcher-based auto-refresh.
 
 ## Tech stack
 
@@ -75,9 +78,9 @@ back to `$HOME` on first run). Pass `PATH` to open a specific directory,
 Preferences are stored at `$XDG_CONFIG_HOME/space/config.json` (typically
 `~/.config/space/config.json`).
 
-Switch views via the three toggle buttons in the header (list, grid,
-columns). Right-click for the context menu. F2 renames, Delete moves to
-trash, F5 refreshes. Ctrl+L focuses the path bar.
+Switch views via the four toggle buttons in the header (list, grid,
+columns, treemap). Right-click for the context menu. F2 renames, Delete
+moves to trash, F5 refreshes. Ctrl+L focuses the path bar.
 
 ## Status
 

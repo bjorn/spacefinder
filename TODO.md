@@ -7,11 +7,12 @@ app does not try to compete.
 
 The plumbing that tells the user what is **bulky** is in place: recursive
 on-disk sizes (blocks × 512, hardlink-deduped) with a process-wide cache,
-plus an icicle columns view that shows size proportions at a glance. The
-cleanup-specific signals for **old** (age columns/filters) and
-**redundant** (duplicate detection) still need to land, along with the
-filter bar, preset sidebar, and summary header that together make the
-pivot from generic file browser to cleanup tool visible in the UI.
+plus two size-proportional visualizations (icicle columns, squarified
+treemap) that show where the bytes are at a glance. The cleanup-specific
+signals for **old** (age columns/filters) and **redundant** (duplicate
+detection) still need to land, along with the filter bar, preset
+sidebar, and summary header that together make the pivot from generic
+file browser to cleanup tool visible in the UI.
 
 Items are roughly ordered, and each is independent unless `Depends on:`
 says otherwise. Pick, reorder, drop as you like.
@@ -83,28 +84,6 @@ controls: `Size >= [slider: 0 B .. 10 GB]`, `Age >= [slider: 0d .. 10y]`,
 - `src/controller.rs`: maintain totals as rows are filtered or selected
 
 **Acceptance:** Sums update live as filters and selection change.
-
----
-
-## 5. Treemap / size-visualization view
-
-**Scope:** A third view mode next to list and grid. A treemap (squarified)
-showing each direct child sized proportionally. Click to drill down.
-
-**Files:**
-- `ui/treemap.slint` (new): thin Slint shell, layout computed by Rust
-- `src/treemap.rs` (new): squarified treemap algorithm, outputs
-  `Vec<{ index, x, y, w, h }>`
-- `ui/main.slint`: add third toggle in view-mode group
-
-**Approach:**
-- Classic squarified treemap (Bruls, Huijsen, van Wijk). Rust computes
-  rectangles for a single level, nested drilldown reruns on click.
-- Each tile labeled with name and size, dimmed when below threshold,
-  clickable.
-
-**Acceptance:** Treemap view of `~` instantly reveals the biggest
-consumers.
 
 ---
 
