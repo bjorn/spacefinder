@@ -1,4 +1,5 @@
 import { Theme } from "theme.slint";
+import { CellRect } from "cell_rect.slint";
 
 export struct Tile {
     // Index into the controller's `filtered` slice. Shared with the
@@ -27,9 +28,8 @@ export component TreemapView inherits Rectangle {
     callback tile-clicked(int, bool);
     // Double left-click: directories drill down, files open in the OS.
     callback tile-double-clicked(int);
-    // Right-click: open the context menu at view-relative (x, y).
-    // Main.slint converts to screen coords, matching the list/grid
-    // `item-right-clicked` convention.
+    // Right-click: open the context menu at screen-relative (x, y),
+    // matching the columns/list/grid convention.
     callback tile-right-clicked(int, length, length);
     // Clicks on the empty background clear the selection.
     callback background-clicked();
@@ -62,73 +62,21 @@ export component TreemapView inherits Rectangle {
         width: max(0px, root.width - 2 * root.pad);
         height: max(0px, root.height - 2 * root.pad);
 
-        for tile in root.tiles : Rectangle {
+        for tile in root.tiles : CellRect {
             x: tile.x * inner.width;
             y: tile.y * inner.height;
             width: max(0px, tile.w * inner.width);
             height: max(0px, tile.h * inner.height);
 
-            // Subtle inner stroke that sits 1px inside the outer border,
-            // matching the columns view's double-outline look so the
-            // two visualizations stay visually consistent.
-            Rectangle {
-                x: 1px;
-                y: 1px;
-                width: parent.width - 3px;
-                height: parent.height - 3px;
-                border-width: 1.5px;
-                border-color: Theme.border;
-                border-radius: 2px;
-                background: tile.selected
-                    ? Theme.selection-bg
-                    : touch.pressed
-                        ? Theme.bg-pressed
-                        : touch.has-hover
-                            ? Theme.bg-hover
-                            : tile.is-dir ? Theme.bg-elevated : Theme.bg-component;
-            }
+            name: tile.name;
+            size-text: tile.size-text;
+            is-dir: tile.is-dir;
+            pending: tile.pending;
+            selected: tile.selected;
 
-            Text {
-                x: 6px;
-                y: 3px;
-                width: max(0px, parent.width - 12px);
-                height: max(0px, parent.height - 6px);
-                text: tile.name + (tile.size-text != "" ? "  " + tile.size-text : "");
-                color: tile.pending ? Theme.text-subtle : Theme.text;
-                font-size: 11px;
-                font-weight: tile.is-dir ? 600 : 400;
-                overflow: elide;
-                wrap: no-wrap;
-                vertical-alignment: top;
-            }
-
-            touch := TouchArea {
-                mouse-cursor: pointer;
-                // Latch the modifier bits on every pointer-event so the
-                // later `clicked` handler has them, mirroring the
-                // file_grid.slint GridTile pattern.
-                property <bool> ctrl-held: false;
-                pointer-event(ev) => {
-                    self.ctrl-held = ev.modifiers.control;
-                    if (ev.button == PointerEventButton.right && ev.kind == PointerEventKind.down) {
-                        // Emit view-relative coordinates. Main.slint
-                        // adds the TreemapView's absolute-position to
-                        // turn these into screen coords before opening
-                        // the context menu.
-                        root.tile-right-clicked(
-                            tile.index,
-                            self.mouse-x + parent.x + inner.x,
-                            self.mouse-y + parent.y + inner.y,
-                        );
-                    }
-                }
-                clicked => {
-                    root.tile-clicked(tile.index, self.ctrl-held);
-                }
-                double-clicked => {
-                    root.tile-double-clicked(tile.index);
-                }
-            }
+            clicked(ctrl) => { root.tile-clicked(tile.index, ctrl); }
+            double-clicked => { root.tile-double-clicked(tile.index); }
+            right-clicked(x, y) => { root.tile-right-clicked(tile.index, x, y); }
         }
     }
 }

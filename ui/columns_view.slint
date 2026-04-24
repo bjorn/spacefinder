@@ -1,4 +1,5 @@
 import { Theme } from "theme.slint";
+import { CellRect } from "cell_rect.slint";
 
 export struct ColumnCell {
     name: string,
@@ -41,65 +42,21 @@ export component ColumnsView inherits Rectangle {
         width: parent.width;
         height: parent.height;
 
-        for cell in root.cells : Rectangle {
+        for cell in root.cells : CellRect {
             x: root.h-pad + cell.col * (root.col-w + root.col-spacing);
             y: root.h-pad + cell.y-start * inner.height;
             width: root.col-w;
             height: max(0px, (cell.y-end - cell.y-start) * inner.height);
 
-            // Subtle inner stroke that sits 1px inside the outer border,
-            // making vertically-stacked cells visually more distinct.
-            Rectangle {
-                x: 1px;
-                y: 1px;
-                width: parent.width - 3px;
-                height: parent.height - 3px;
-                border-width: 1.5px;
-                border-color: Theme.border;
-                border-radius: 2px;
-                background: cell.selected
-                    ? Theme.selection-bg
-                    : touch.pressed
-                        ? Theme.bg-pressed
-                        : touch.has-hover
-                            ? Theme.bg-hover
-                            : cell.is-dir ? Theme.bg-elevated : Theme.bg-component;
-            }
+            name: cell.name;
+            size-text: cell.size-text;
+            is-dir: cell.is-dir;
+            pending: cell.pending;
+            selected: cell.selected;
 
-            Text {
-                x: 6px;
-                y: 3px;
-                width: max(0px, parent.width - 12px);
-                height: max(0px, parent.height - 6px);
-                text: cell.name + (cell.size-text != "" ? "  " + cell.size-text : "");
-                color: cell.pending ? Theme.text-subtle : Theme.text;
-                font-size: 11px;
-                font-weight: cell.is-dir ? 600 : 400;
-                overflow: elide;
-                wrap: no-wrap;
-                vertical-alignment: top;
-            }
-
-            touch := TouchArea {
-                mouse-cursor: pointer;
-                pointer-event(ev) => {
-                    if (ev.button == PointerEventButton.right && ev.kind == PointerEventKind.down) {
-                        // Screen-relative coordinates, matching the
-                        // list and grid views' convention.
-                        root.cell-right-clicked(
-                            cell.path,
-                            self.mouse-x + parent.absolute-position.x,
-                            self.mouse-y + parent.absolute-position.y,
-                        );
-                    }
-                }
-                clicked => {
-                    root.cell-clicked(cell.path);
-                }
-                double-clicked => {
-                    root.cell-double-clicked(cell.path, cell.is-dir, cell.is-root);
-                }
-            }
+            clicked(_ctrl) => { root.cell-clicked(cell.path); }
+            double-clicked => { root.cell-double-clicked(cell.path, cell.is-dir, cell.is-root); }
+            right-clicked(x, y) => { root.cell-right-clicked(cell.path, x, y); }
         }
     }
 }

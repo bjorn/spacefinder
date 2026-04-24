@@ -1,0 +1,92 @@
+import { Theme } from "theme.slint";
+
+// Shared cell rectangle used by the columns and treemap views. Both
+// render a grid of these: a double-outlined box, bold when the entry
+// is a directory, muted while a size recompute is pending, with a
+// two-part label where the size text is a touch dimmer than the name
+// so the name reads first.
+export component CellRect inherits Rectangle {
+    in property <string> name;
+    in property <string> size-text;
+    in property <bool> is-dir;
+    in property <bool> pending;
+    in property <bool> selected;
+
+    callback clicked(bool /* ctrl-held */);
+    callback double-clicked();
+    // Screen-relative (x, y) so callers can forward directly to the
+    // context-menu plumbing without further offsetting.
+    callback right-clicked(length, length);
+
+    // Subtle inner stroke that sits 1px inside the outer border,
+    // making adjacent cells visually more distinct.
+    Rectangle {
+        x: 1px;
+        y: 1px;
+        width: parent.width - 3px;
+        height: parent.height - 3px;
+        border-width: 1.5px;
+        border-color: Theme.border;
+        border-radius: 2px;
+        background: root.selected
+            ? Theme.selection-bg
+            : touch.pressed
+                ? Theme.bg-pressed
+                : touch.has-hover
+                    ? Theme.bg-hover
+                    : root.is-dir ? Theme.bg-elevated : Theme.bg-component;
+    }
+
+    HorizontalLayout {
+        x: 6px;
+        y: 3px;
+        width: max(0px, parent.width - 12px);
+        height: max(0px, parent.height - 6px);
+        spacing: 4px;
+
+        Text {
+            text: root.name;
+            color: root.pending ? Theme.text-subtle : Theme.text;
+            font-size: 11px;
+            font-weight: root.is-dir ? 600 : 400;
+            overflow: elide;
+            wrap: no-wrap;
+            vertical-alignment: top;
+        }
+        Text {
+            text: root.size-text;
+            color: root.pending ? Theme.text-subtle : Theme.text-muted;
+            font-size: 11px;
+            font-weight: root.is-dir ? 600 : 400;
+            overflow: elide;
+            wrap: no-wrap;
+            vertical-alignment: top;
+            horizontal-stretch: 1;
+            preferred-width: 0;
+            min-width: 0;
+        }
+    }
+
+    touch := TouchArea {
+        mouse-cursor: pointer;
+        // Latch the modifier bits on every pointer-event so the later
+        // `clicked` handler has them, mirroring the file_grid.slint
+        // GridTile pattern.
+        property <bool> ctrl-held: false;
+        pointer-event(ev) => {
+            self.ctrl-held = ev.modifiers.control;
+            if (ev.button == PointerEventButton.right && ev.kind == PointerEventKind.down) {
+                root.right-clicked(
+                    self.mouse-x + root.absolute-position.x,
+                    self.mouse-y + root.absolute-position.y,
+                );
+            }
+        }
+        clicked => {
+            root.clicked(self.ctrl-held);
+        }
+        double-clicked => {
+            root.double-clicked();
+        }
+    }
+}

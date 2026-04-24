@@ -199,7 +199,7 @@ export component MainWindow inherits Window {
                         }
                         tile-double-clicked(i) => { root.item-double-clicked(i); }
                         tile-right-clicked(i, x, y) => {
-                            root.item-right-clicked(i, x + parent.absolute-position.x, y + parent.absolute-position.y);
+                            root.item-right-clicked(i, x, y);
                         }
                         background-clicked => { root.background-clicked(); }
                         background-right-clicked(x, y) => {
