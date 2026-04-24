@@ -1,6 +1,6 @@
 use crate::columns::{self, LaidCell};
 use crate::config::{self, Config};
-use crate::dir_size::SizeEngine;
+use crate::dir_size::{self, SizeEngine};
 use crate::disk;
 use crate::fs_scan::{self, Entry, SizeState, SortCol};
 use crate::i18n::{tr, tr_fmt, tr_n_fmt};
@@ -321,6 +321,23 @@ impl App {
             self.current.display(),
             self.entries.len()
         );
+        // Backfill dir sizes (and recursive mtimes) synchronously from
+        // the shared cache. `fs_scan::scan` always flags directories as
+        // `Calculating`, which is correct on a cold walk but produces a
+        // one-frame flash of "…" every time the user revisits a folder
+        // we've already settled. The async size pass still runs below;
+        // cache hits there no-op since the state is unchanged.
+        for entry in &mut self.entries {
+            if !entry.is_dir {
+                continue;
+            }
+            if let Some((size, rec_mtime)) = dir_size::lookup_cached_total(&entry.path) {
+                entry.size_state = SizeState::Known(size);
+                if let Some(t) = rec_mtime {
+                    entry.modified = t;
+                }
+            }
+        }
         self.rebuild_view();
         // If a preceding `go_up` requested it, re-select the child
         // directory we just left so it stays highlighted (and becomes

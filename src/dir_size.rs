@@ -124,6 +124,15 @@ pub fn lookup_cached_size(dir: &Path) -> Option<u64> {
     lookup_cached(dir).map(|(_, agg)| agg.size)
 }
 
+/// Synchronous cache probe returning `(size, recursive_mtime)`. Mirrors
+/// the payload that [`SizeEngine::compute`] would deliver via
+/// `on_progress` on a cache hit, minus the event-loop hop — callers that
+/// own the target row synchronously can use this to avoid a first-frame
+/// flash of "pending" state for already-walked directories.
+pub fn lookup_cached_total(dir: &Path) -> Option<(u64, Option<SystemTime>)> {
+    lookup_cached(dir).map(|(_, agg)| (agg.size, agg.recursive_mtime))
+}
+
 /// Perform the full walk for `root`, populate the cache, and emit
 /// `on_progress` for every directory encountered.
 fn walk_and_aggregate(
