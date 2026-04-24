@@ -73,6 +73,7 @@ export component TreemapView inherits Rectangle {
             is-dir: tile.is-dir;
             pending: tile.pending;
             selected: tile.selected;
+            stacked: true;
 
             clicked(ctrl) => { root.tile-clicked(tile.index, ctrl); }
             double-clicked => { root.tile-double-clicked(tile.index); }

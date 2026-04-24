@@ -2,7 +2,7 @@ import { Theme } from "theme.slint";
 
 // Shared cell rectangle used by the columns and treemap views. Both
 // render a grid of these: a double-outlined box, bold when the entry
-// is a directory, muted while a size recompute is pending, with a
+// is a directory, muted while a size recompute is pending, and a
 // two-part label where the size text is a touch dimmer than the name
 // so the name reads first.
 export component CellRect inherits Rectangle {
@@ -11,6 +11,15 @@ export component CellRect inherits Rectangle {
     in property <bool> is-dir;
     in property <bool> pending;
     in property <bool> selected;
+    // Stack the size below the name on a second row, both left-aligned.
+    // The treemap uses this layout; its wide-but-short tiles read more
+    // naturally with the label on two rows than with the size right-
+    // aligned far from the name.
+    in property <bool> stacked: false;
+
+    // Tiles shorter than two lines would otherwise bleed their label
+    // past the cell border. Clipping the root keeps that contained.
+    clip: true;
 
     callback clicked(bool /* ctrl-held */);
     callback double-clicked();
@@ -37,34 +46,51 @@ export component CellRect inherits Rectangle {
                     : root.is-dir ? Theme.bg-elevated : Theme.bg-component;
     }
 
-    HorizontalLayout {
+    // Name label. Inline mode: claims the space to the left of the
+    // size label, eliding first when tight. Stacked mode: full row,
+    // intrinsic one-line height.
+    //
+    // Two Text elements are unavoidable (Slint Text is single-color)
+    // but we position them absolutely rather than via a layout — with
+    // hundreds of tiles the layout pass dominates frame cost.
+    name-label := Text {
         x: 6px;
         y: 3px;
-        width: max(0px, parent.width - 12px);
-        height: max(0px, parent.height - 6px);
-        spacing: 4px;
+        width: root.stacked
+            ? max(0px, parent.width - 12px)
+            : max(0px, size-label.x - self.x - 4px);
+        height: root.stacked
+            ? self.preferred-height
+            : max(0px, parent.height - 6px);
+        text: root.name;
+        color: root.pending ? Theme.text-subtle : Theme.text;
+        font-size: 11px;
+        font-weight: root.is-dir ? 600 : 400;
+        overflow: elide;
+        wrap: no-wrap;
+        vertical-alignment: top;
+    }
 
-        Text {
-            text: root.name;
-            color: root.pending ? Theme.text-subtle : Theme.text;
-            font-size: 11px;
-            font-weight: root.is-dir ? 600 : 400;
-            overflow: elide;
-            wrap: no-wrap;
-            vertical-alignment: top;
-        }
-        Text {
-            text: root.size-text;
-            color: root.pending ? Theme.text-subtle : Theme.text-muted;
-            font-size: 11px;
-            font-weight: root.is-dir ? 600 : 400;
-            overflow: elide;
-            wrap: no-wrap;
-            vertical-alignment: top;
-            horizontal-stretch: 1;
-            preferred-width: 0;
-            min-width: 0;
-        }
+    // Size label. Inline mode: intrinsic width, right-aligned. Stacked
+    // mode: left-aligned on the row below the name. Size's stacked-y
+    // rides on the name's intrinsic height so a future font-size tweak
+    // or script-specific metrics land correctly with no extra knob.
+    size-label := Text {
+        x: root.stacked ? 6px : max(6px, parent.width - self.width - 6px);
+        y: root.stacked ? (name-label.y + name-label.height + 1px) : 3px;
+        width: root.stacked
+            ? max(0px, parent.width - 12px)
+            : self.preferred-width;
+        height: root.stacked
+            ? max(0px, parent.height - self.y - 3px)
+            : max(0px, parent.height - 6px);
+        text: root.size-text;
+        color: root.pending ? Theme.text-subtle : Theme.text-muted;
+        font-size: 11px;
+        font-weight: root.is-dir ? 600 : 400;
+        overflow: elide;
+        wrap: no-wrap;
+        vertical-alignment: top;
     }
 
     touch := TouchArea {
