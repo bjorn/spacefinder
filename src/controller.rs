@@ -41,7 +41,15 @@ pub struct App {
 
     entries: Vec<Entry>,
     filtered: Vec<usize>, // indices into `entries` visible after filter+sort
-    selection: FxHashSet<usize>, // indices into `filtered`
+    /// Entries the user has selected. Stored as indices into
+    /// `entries` (the unsorted source-of-truth) rather than into
+    /// `filtered`, so a sort change or filter toggle keeps the same
+    /// files highlighted instead of inheriting the new occupants of
+    /// the old display rows.
+    selection: FxHashSet<usize>,
+    /// Entry index of the user's most-recent focus anchor — drives
+    /// shift-range and arrow-key navigation. Same `entries` keying as
+    /// `selection` for the same reason.
     last_clicked: Option<usize>,
     cut_paths: FxHashSet<PathBuf>, // paths marked as "cut"
     clipboard_op: Option<ClipOp>,
@@ -312,6 +320,24 @@ impl App {
         // a previous scan get dropped.
         self.generation = self.generation.wrapping_add(1);
 
+        // Selection is keyed on `entries` indices. Re-scanning replaces
+        // the vector, which would otherwise orphan those indices onto
+        // whatever rows happened to land at the same positions —
+        // visible to the user as "deleted files leave random others
+        // selected." Snapshot paths first, re-resolve below.
+        let prev_selected_paths: FxHashSet<PathBuf> = self
+            .selection
+            .iter()
+            .filter_map(|&e| self.entries.get(e))
+            .map(|e| e.path.clone())
+            .collect();
+        let prev_anchor_path: Option<PathBuf> = self
+            .last_clicked
+            .and_then(|e| self.entries.get(e))
+            .map(|e| e.path.clone());
+        self.selection.clear();
+        self.last_clicked = None;
+
         self.entries = fs_scan::scan(&self.current).unwrap_or_else(|e| {
             log::warn!("scan failed for {}: {}", self.current.display(), e);
             Vec::new()
@@ -338,19 +364,32 @@ impl App {
                 }
             }
         }
+        // Re-resolve the snapshot against the new entries. Files that
+        // were deleted, moved, or renamed drop out naturally — exactly
+        // what the user expects after a trash or delete.
+        if !prev_selected_paths.is_empty() {
+            for (i, e) in self.entries.iter().enumerate() {
+                if prev_selected_paths.contains(&e.path) {
+                    self.selection.insert(i);
+                }
+            }
+        }
+        if let Some(p) = prev_anchor_path {
+            self.last_clicked = self.entries.iter().position(|e| e.path == p);
+        }
         self.rebuild_view();
         // If a preceding `go_up` requested it, re-select the child
         // directory we just left so it stays highlighted (and becomes
         // the keyboard-focus anchor). One-shot.
         if let Some(name) = self.select_after_navigate.take() {
-            if let Some(idx) = self
+            if let Some(&eidx) = self
                 .filtered
                 .iter()
-                .position(|&eidx| self.entries[eidx].name == name)
+                .find(|&&e| self.entries[e].name == name)
             {
                 self.selection.clear();
-                self.selection.insert(idx);
-                self.last_clicked = Some(idx);
+                self.selection.insert(eidx);
+                self.last_clicked = Some(eidx);
             }
         }
         self.push_ui_state();
@@ -438,7 +477,7 @@ impl App {
         let laid = treemap::lay_out(&inputs);
         let tiles: Vec<Tile> = laid
             .iter()
-            .map(|c| laid_tile_to_ui(c, &self.selection))
+            .map(|c| laid_tile_to_ui(c, &self.selection, &self.filtered))
             .collect();
         self.treemap_model.set_vec(tiles);
         self.treemap_tiles = laid;
@@ -725,7 +764,7 @@ impl App {
     /// the responsiveness batching.
     fn push_items_model(&self) {
         let mut items: Vec<FileItem> = Vec::with_capacity(self.filtered.len());
-        for (display_idx, &eidx) in self.filtered.iter().enumerate() {
+        for &eidx in self.filtered.iter() {
             let e = &self.entries[eidx];
             items.push(FileItem {
                 name: e.name.clone().into(),
@@ -733,7 +772,7 @@ impl App {
                 is_dir: e.is_dir,
                 size_text: e.size_text().into(),
                 modified_text: e.modified_text().into(),
-                selected: self.selection.contains(&display_idx),
+                selected: self.selection.contains(&eidx),
                 cut: self.cut_paths.contains(&e.path),
                 hidden: e.hidden,
             });
@@ -801,11 +840,14 @@ impl App {
             self.folders_first,
         );
 
-        // Clamp selection.
-        let max = self.filtered.len();
-        self.selection.retain(|i| *i < max);
-        if let Some(i) = self.last_clicked {
-            if i >= max {
+        // Drop selection entries that are no longer visible. Selection
+        // is keyed on `entries` indices, so a sort change preserves it
+        // verbatim; this only matters when the filter (search /
+        // hidden-files toggle) hides a previously-selected file.
+        let visible: FxHashSet<usize> = self.filtered.iter().copied().collect();
+        self.selection.retain(|eidx| visible.contains(eidx));
+        if let Some(e) = self.last_clicked {
+            if !visible.contains(&e) {
                 self.last_clicked = None;
             }
         }
@@ -815,7 +857,7 @@ impl App {
         let Some(ui) = self.ui.upgrade() else { return };
 
         let mut items: Vec<FileItem> = Vec::with_capacity(self.filtered.len());
-        for (display_idx, &eidx) in self.filtered.iter().enumerate() {
+        for &eidx in self.filtered.iter() {
             let e = &self.entries[eidx];
             items.push(FileItem {
                 name: e.name.clone().into(),
@@ -823,7 +865,7 @@ impl App {
                 is_dir: e.is_dir,
                 size_text: e.size_text().into(),
                 modified_text: e.modified_text().into(),
-                selected: self.selection.contains(&display_idx),
+                selected: self.selection.contains(&eidx),
                 cut: self.cut_paths.contains(&e.path),
                 hidden: e.hidden,
             });
@@ -914,8 +956,7 @@ impl App {
             let selected_entries: Vec<&Entry> = self
                 .selection
                 .iter()
-                .filter_map(|&i| self.filtered.get(i))
-                .map(|&eidx| &self.entries[eidx])
+                .filter_map(|&eidx| self.entries.get(eidx))
                 .collect();
             let (sel_bytes, sel_pending) = fs_scan::total_known_sizes(&selected_entries);
             let sel_size_text = format_total(sel_bytes, sel_pending);
@@ -1018,29 +1059,40 @@ impl App {
         }
     }
 
-    fn select_only(&mut self, idx: usize) {
+    fn select_only(&mut self, display_idx: usize) {
+        let Some(&eidx) = self.filtered.get(display_idx) else { return };
         self.selection.clear();
-        self.selection.insert(idx);
-        self.last_clicked = Some(idx);
+        self.selection.insert(eidx);
+        self.last_clicked = Some(eidx);
     }
 
-    fn toggle_selection(&mut self, idx: usize) {
-        if !self.selection.insert(idx) {
-            self.selection.remove(&idx);
+    fn toggle_selection(&mut self, display_idx: usize) {
+        let Some(&eidx) = self.filtered.get(display_idx) else { return };
+        if !self.selection.insert(eidx) {
+            self.selection.remove(&eidx);
         }
-        self.last_clicked = Some(idx);
+        self.last_clicked = Some(eidx);
     }
 
-    fn range_select(&mut self, idx: usize) {
-        let anchor = self.last_clicked.unwrap_or(idx);
-        let (lo, hi) = if anchor <= idx {
-            (anchor, idx)
+    fn range_select(&mut self, display_idx: usize) {
+        // Anchor in display-row space: arrow / shift-click pick a
+        // contiguous range of *visible* rows, regardless of how those
+        // map back to `entries`. Translate the entry-keyed
+        // `last_clicked` to a display position for that purpose.
+        let anchor_display = self
+            .last_clicked
+            .and_then(|e| self.filtered.iter().position(|&f| f == e))
+            .unwrap_or(display_idx);
+        let (lo, hi) = if anchor_display <= display_idx {
+            (anchor_display, display_idx)
         } else {
-            (idx, anchor)
+            (display_idx, anchor_display)
         };
         self.selection.clear();
-        for i in lo..=hi {
-            self.selection.insert(i);
+        for d in lo..=hi {
+            if let Some(&eidx) = self.filtered.get(d) {
+                self.selection.insert(eidx);
+            }
         }
     }
 
@@ -1077,29 +1129,40 @@ impl App {
     /// iterate the tile model and check its `row_index` rather than
     /// indexing by position.
     fn refresh_selection_display(&self, prev: &FxHashSet<usize>) {
-        // Symmetric difference: rows that entered or left the set.
-        let affected: FxHashSet<usize> = prev
+        // Symmetric difference in entry space: which `entries` rows
+        // changed selected/unselected status.
+        let affected_eidx: FxHashSet<usize> = prev
             .symmetric_difference(&self.selection)
             .copied()
             .collect();
-        for i in &affected {
-            if let Some(mut item) = self.items_model.row_data(*i) {
-                item.selected = self.selection.contains(i);
-                self.items_model.set_row_data(*i, item);
+        // Translate to display positions for the items model. Walk
+        // `filtered` once instead of doing a position-search per
+        // affected entry.
+        for (display_idx, &eidx) in self.filtered.iter().enumerate() {
+            if !affected_eidx.contains(&eidx) {
+                continue;
+            }
+            if let Some(mut item) = self.items_model.row_data(display_idx) {
+                item.selected = self.selection.contains(&eidx);
+                self.items_model.set_row_data(display_idx, item);
             }
         }
-        // Treemap uses the same `selection` set but has its own
-        // VecModel. Walk it once and flip any tile whose row flipped.
+        // Treemap uses the same `selection` set but its own VecModel.
+        // Tile.index carries the display position; map back to eidx
+        // through `filtered` to test membership in the entry-keyed set.
         let tile_count = self.treemap_model.row_count();
         for t in 0..tile_count {
             let Some(mut tile) = self.treemap_model.row_data(t) else {
                 continue;
             };
-            let idx = tile.index as usize;
-            if !affected.contains(&idx) {
+            let display_idx = tile.index as usize;
+            let Some(&eidx) = self.filtered.get(display_idx) else {
+                continue;
+            };
+            if !affected_eidx.contains(&eidx) {
                 continue;
             }
-            let now_selected = self.selection.contains(&idx);
+            let now_selected = self.selection.contains(&eidx);
             if tile.selected != now_selected {
                 tile.selected = now_selected;
                 self.treemap_model.set_row_data(t, tile);
@@ -1166,14 +1229,14 @@ impl App {
         // In column mode, the "selection" is the single path the user
         // last clicked in the icicle view — context-menu actions
         // target that one path. Every other view shares the top-level
-        // `selection` set (indices into `filtered`).
+        // `selection` set (indices into `entries`).
         if self.view_mode == 2 {
             return self.column_selected_path.iter().cloned().collect();
         }
         self.selection
             .iter()
-            .filter_map(|&idx| self.filtered.get(idx))
-            .map(|&eidx| self.entries[eidx].path.clone())
+            .filter_map(|&eidx| self.entries.get(eidx))
+            .map(|e| e.path.clone())
             .collect()
     }
 
@@ -1191,9 +1254,14 @@ impl App {
             }
             return;
         }
-        // List, grid and treemap all share `last_clicked`.
-        if let Some(idx) = self.last_clicked {
-            self.double_click(idx);
+        // List, grid and treemap all share `last_clicked`. Translate
+        // back to a display position for `double_click`, which still
+        // takes display indices since that's what the click callbacks
+        // hand it.
+        if let Some(eidx) = self.last_clicked {
+            if let Some(display_idx) = self.filtered.iter().position(|&e| e == eidx) {
+                self.double_click(display_idx);
+            }
         }
     }
 
@@ -1550,11 +1618,19 @@ impl App {
         if n == 0 {
             return false;
         }
-        // Current focus: prefer the explicit anchor, fall back to first
-        // selected, else to 0.
+        // Current focus, in display-row space: prefer the explicit
+        // anchor, fall back to the topmost selected row, else to 0.
+        // Both `last_clicked` and `selection` are entry-keyed, so
+        // translate through `filtered`.
         let cur = self
             .last_clicked
-            .or_else(|| self.selection.iter().copied().min())
+            .and_then(|e| self.filtered.iter().position(|&f| f == e))
+            .or_else(|| {
+                self.selection
+                    .iter()
+                    .filter_map(|&e| self.filtered.iter().position(|&f| f == e))
+                    .min()
+            })
             .unwrap_or(0)
             .min(n - 1);
 
@@ -1775,11 +1851,14 @@ impl App {
 
         // Find the tile corresponding to the anchor (`last_clicked`),
         // or fall through to the largest tile if there is no anchor
-        // or the anchor's row has no tile (e.g. zero-size dir).
-        let anchor = self.last_clicked;
-        let cur_tile_idx: Option<usize> = anchor.and_then(|a| {
-            self.treemap_tiles.iter().position(|c| c.row_index == a)
-        });
+        // or the anchor's row has no tile (e.g. zero-size dir). Tiles
+        // carry a display position (`row_index`) but `last_clicked` is
+        // entry-keyed, so translate first.
+        let anchor_display = self
+            .last_clicked
+            .and_then(|e| self.filtered.iter().position(|&f| f == e));
+        let cur_tile_idx: Option<usize> = anchor_display
+            .and_then(|a| self.treemap_tiles.iter().position(|c| c.row_index == a));
         let cur_tile_idx = match cur_tile_idx {
             Some(i) => i,
             None => {
@@ -1829,7 +1908,8 @@ impl App {
 
         if let Some(i) = target {
             let new_row = self.treemap_tiles[i].row_index;
-            if self.last_clicked != Some(new_row) {
+            let new_eidx = self.filtered.get(new_row).copied();
+            if self.last_clicked != new_eidx {
                 self.click(new_row, /* ctrl */ false, /* shift */ false);
             }
         }
@@ -1988,10 +2068,12 @@ fn laid_cell_to_ui(c: &LaidCell, selected: Option<&Path>) -> ColumnCell {
 /// Convert a `treemap::Tile` into the Slint-facing `Tile` struct.
 /// `x`/`y`/`w`/`h` are fractions in `[0.0, 1.0]`; the Slint side
 /// multiplies by the live treemap width/height to produce pixels.
-/// `selected` is set when the tile's `row_index` is in the shared
-/// `selection` set, so ticking a tile in list/grid highlights the
-/// matching tile in the treemap (and vice-versa).
-fn laid_tile_to_ui(c: &LaidTile, selection: &FxHashSet<usize>) -> Tile {
+/// `selected` is set when the tile's underlying `entries` row is in
+/// the shared `selection` set, so ticking a tile in list/grid
+/// highlights the matching tile in the treemap (and vice-versa).
+fn laid_tile_to_ui(c: &LaidTile, selection: &FxHashSet<usize>, filtered: &[usize]) -> Tile {
+    let eidx = filtered.get(c.row_index).copied();
+    let selected = eidx.map(|e| selection.contains(&e)).unwrap_or(false);
     Tile {
         index: c.row_index as i32,
         name: c.name.clone().into(),
@@ -2002,7 +2084,7 @@ fn laid_tile_to_ui(c: &LaidTile, selection: &FxHashSet<usize>) -> Tile {
         h: c.h,
         is_dir: c.is_dir,
         pending: c.pending,
-        selected: selection.contains(&c.row_index),
+        selected,
     }
 }
 
@@ -2313,10 +2395,18 @@ fn wire_callbacks(ui: &MainWindow, app: Rc<RefCell<App>>) {
         let app = app.clone();
         ui.on_item_right_clicked(move |idx, x, y| {
             let mut a = app.borrow_mut();
-            let idx = idx as usize;
-            if !a.selection.contains(&idx) {
+            let display_idx = idx as usize;
+            // Right-click on an already-selected row keeps the rest of
+            // the selection; otherwise reset to just this row so the
+            // menu acts on what the user clicked.
+            let already_selected = a
+                .filtered
+                .get(display_idx)
+                .map(|eidx| a.selection.contains(eidx))
+                .unwrap_or(false);
+            if !already_selected {
                 let prev = a.selection.clone();
-                a.select_only(idx);
+                a.select_only(display_idx);
                 a.refresh_selection_display(&prev);
             }
             drop(a);
