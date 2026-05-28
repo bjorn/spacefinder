@@ -38,7 +38,7 @@ use std::path::{Path, PathBuf};
 use std::sync::{Arc, LazyLock, Mutex};
 use std::time::SystemTime;
 
-use crate::fs_scan::{on_disk_bytes, SizeState};
+use crate::fs_scan::{SizeState, on_disk_bytes};
 
 type CacheKey = (PathBuf, SystemTime);
 
@@ -135,11 +135,7 @@ pub fn lookup_cached_total(dir: &Path) -> Option<(u64, Option<SystemTime>)> {
 
 /// Perform the full walk for `root`, populate the cache, and emit
 /// `on_progress` for every directory encountered.
-fn walk_and_aggregate(
-    root: &Path,
-    pool: Arc<ThreadPool>,
-    on_progress: &ProgressFn,
-) {
+fn walk_and_aggregate(root: &Path, pool: Arc<ThreadPool>, on_progress: &ProgressFn) {
     // Canonicalize once so cache entries share a normalized key even if the
     // user reached the dir via a symlink.
     let canon_root = match std::fs::canonicalize(root) {
@@ -156,8 +152,7 @@ fn walk_and_aggregate(
     // cache; direct_bytes is summed at file-encounter time and rolled up
     // bottom-up; running_max_mtime starts at own_mtime and is bumped by
     // every file and (in the rollup pass) every descendant's final max.
-    let mut dir_info: FxHashMap<PathBuf, (SystemTime, u64, SystemTime)> =
-        FxHashMap::default();
+    let mut dir_info: FxHashMap<PathBuf, (SystemTime, u64, SystemTime)> = FxHashMap::default();
     // Parent-dir path → child-dir paths, for the aggregation pass.
     let mut dir_children: FxHashMap<PathBuf, Vec<PathBuf>> = FxHashMap::default();
     // Dirs we failed to read completely. Their size is Unknown.
@@ -204,13 +199,14 @@ fn walk_and_aggregate(
                         .ok()
                         .and_then(|m| m.modified().ok())
                         .unwrap_or(SystemTime::UNIX_EPOCH);
-                    dir_info
-                        .entry(path.clone())
-                        .or_insert((mtime, 0, mtime));
+                    dir_info.entry(path.clone()).or_insert((mtime, 0, mtime));
                     // Remember this dir under its parent (skip the root itself;
                     // its parent is outside the walk).
                     if path != canon_root {
-                        dir_children.entry(parent.clone()).or_default().push(path.clone());
+                        dir_children
+                            .entry(parent.clone())
+                            .or_default()
+                            .push(path.clone());
                     }
                     // Did we fail to read its children?
                     if entry.read_children_error.is_some() {
@@ -227,8 +223,7 @@ fn walk_and_aggregate(
                             continue;
                         }
                         let bytes = on_disk_bytes(&meta);
-                        let file_mtime =
-                            meta.modified().unwrap_or(SystemTime::UNIX_EPOCH);
+                        let file_mtime = meta.modified().unwrap_or(SystemTime::UNIX_EPOCH);
                         if let Some(info) = dir_info.get_mut(&parent) {
                             info.1 = info.1.saturating_add(bytes);
                             if file_mtime > info.2 {
@@ -328,7 +323,11 @@ mod tests {
         let pid = std::process::id();
         let root = std::env::temp_dir().join(format!("space-dir-size-{}-{}", pid, nanos));
         std::fs::create_dir_all(root.join("sub/inner")).unwrap();
-        let files = [("a.bin", 1000usize), ("sub/b.bin", 2000), ("sub/inner/c.bin", 4000)];
+        let files = [
+            ("a.bin", 1000usize),
+            ("sub/b.bin", 2000),
+            ("sub/inner/c.bin", 4000),
+        ];
         let mut expected: u64 = 0;
         for (rel, len) in files {
             let p = root.join(rel);
@@ -589,7 +588,9 @@ mod tests {
         eprintln!(
             "PROBE {}: total={} bytes, dirs_seen={}, elapsed={:?}",
             path,
-            run.root_total.map(|n| n.to_string()).unwrap_or_else(|| "UNKNOWN".into()),
+            run.root_total
+                .map(|n| n.to_string())
+                .unwrap_or_else(|| "UNKNOWN".into()),
             run.dirs_seen,
             run.elapsed,
         );
@@ -607,7 +608,9 @@ mod tests {
         eprintln!(
             "COLD: {:?}, total={}, dirs_seen={}",
             cold.elapsed,
-            cold.root_total.map(|n| format!("{} bytes", n)).unwrap_or_else(|| "UNKNOWN".into()),
+            cold.root_total
+                .map(|n| format!("{} bytes", n))
+                .unwrap_or_else(|| "UNKNOWN".into()),
             cold.dirs_seen,
         );
 
@@ -615,7 +618,9 @@ mod tests {
         eprintln!(
             "WARM: {:?}, total={}, dirs_seen={}",
             warm.elapsed,
-            warm.root_total.map(|n| format!("{} bytes", n)).unwrap_or_else(|| "UNKNOWN".into()),
+            warm.root_total
+                .map(|n| format!("{} bytes", n))
+                .unwrap_or_else(|| "UNKNOWN".into()),
             warm.dirs_seen,
         );
     }

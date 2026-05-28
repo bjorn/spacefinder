@@ -4,7 +4,7 @@ use crate::fs_scan::SizeState;
 use crate::i18n::tr;
 use crate::icons::Icons;
 use crate::{MainWindow, SidebarItem};
-use humansize::{format_size, BINARY};
+use humansize::{BINARY, format_size};
 use rustc_hash::FxHashMap;
 use slint::{Model, SharedString};
 use std::path::{Path, PathBuf};
@@ -31,25 +31,67 @@ pub fn build(icons: &Icons) -> Built {
     let home = dirs::home_dir();
     push_header(&mut items, &tr("Places"));
     if let Some(home) = &home {
-        push_place(&mut items, &mut places_to_size, &tr("Home"), icons.home(), home);
+        push_place(
+            &mut items,
+            &mut places_to_size,
+            &tr("Home"),
+            icons.home(),
+            home,
+        );
     }
     if let Some(p) = dirs::desktop_dir() {
-        push_place(&mut items, &mut places_to_size, &tr("Desktop"), icons.folder(), &p);
+        push_place(
+            &mut items,
+            &mut places_to_size,
+            &tr("Desktop"),
+            icons.folder(),
+            &p,
+        );
     }
     if let Some(p) = dirs::document_dir() {
-        push_place(&mut items, &mut places_to_size, &tr("Documents"), icons.folder(), &p);
+        push_place(
+            &mut items,
+            &mut places_to_size,
+            &tr("Documents"),
+            icons.folder(),
+            &p,
+        );
     }
     if let Some(p) = dirs::download_dir() {
-        push_place(&mut items, &mut places_to_size, &tr("Downloads"), icons.folder(), &p);
+        push_place(
+            &mut items,
+            &mut places_to_size,
+            &tr("Downloads"),
+            icons.folder(),
+            &p,
+        );
     }
     if let Some(p) = dirs::audio_dir() {
-        push_place(&mut items, &mut places_to_size, &tr("Music"), icons.folder(), &p);
+        push_place(
+            &mut items,
+            &mut places_to_size,
+            &tr("Music"),
+            icons.folder(),
+            &p,
+        );
     }
     if let Some(p) = dirs::picture_dir() {
-        push_place(&mut items, &mut places_to_size, &tr("Pictures"), icons.folder(), &p);
+        push_place(
+            &mut items,
+            &mut places_to_size,
+            &tr("Pictures"),
+            icons.folder(),
+            &p,
+        );
     }
     if let Some(p) = dirs::video_dir() {
-        push_place(&mut items, &mut places_to_size, &tr("Videos"), icons.folder(), &p);
+        push_place(
+            &mut items,
+            &mut places_to_size,
+            &tr("Videos"),
+            icons.folder(),
+            &p,
+        );
     }
     items.push(separator());
     let trash_idx = items.len();
@@ -73,7 +115,10 @@ pub fn build(icons: &Icons) -> Built {
     push_header(&mut items, &tr("Drives"));
     items.push(drive(&tr("Root"), icons.drive(), &PathBuf::from("/")));
 
-    Built { items, places_to_size }
+    Built {
+        items,
+        places_to_size,
+    }
 }
 
 fn push_header(items: &mut Vec<SidebarItem>, label: &str) {

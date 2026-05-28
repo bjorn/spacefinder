@@ -8,7 +8,7 @@ use crate::icons::Icons;
 use crate::sidebar::{self, TRASH_TAG};
 use crate::treemap::{self, Tile as LaidTile};
 use crate::{ColumnCell, Crumb, FileItem, FileListState, MainWindow, MenuEntry, Tile};
-use humansize::{format_size, BINARY};
+use humansize::{BINARY, format_size};
 use rustc_hash::FxHashSet;
 use slint::{ComponentHandle, Global, Model, ModelRc, SharedString, VecModel};
 use std::cell::{Cell, RefCell};
@@ -151,7 +151,10 @@ enum ConfirmAction {
 impl App {
     pub fn new(ui: &MainWindow, start: PathBuf, cfg: Config) -> Rc<RefCell<Self>> {
         let icons = Icons::new();
-        let sidebar::Built { items: sidebar_items, places_to_size } = sidebar::build(&icons);
+        let sidebar::Built {
+            items: sidebar_items,
+            places_to_size,
+        } = sidebar::build(&icons);
         let items_model = Rc::new(VecModel::<FileItem>::default());
         ui.set_items(ModelRc::from(items_model.clone()));
         let columns_model = Rc::new(VecModel::<ColumnCell>::default());
@@ -291,7 +294,9 @@ impl App {
         slint::Timer::single_shot(remaining, move || {
             flag.set(false);
             APP_TLS.with(|slot| {
-                let Some(weak) = slot.borrow().clone() else { return };
+                let Some(weak) = slot.borrow().clone() else {
+                    return;
+                };
                 let Some(app) = weak.upgrade() else { return };
                 if let Ok(mut app) = app.try_borrow_mut() {
                     app.refresh_window_size();
@@ -416,10 +421,7 @@ impl App {
     fn recompute_columns(&mut self) {
         let laid = columns::lay_out(&self.current, self.show_hidden);
         let selected = self.column_selected_path.as_deref();
-        let cells: Vec<ColumnCell> = laid
-            .iter()
-            .map(|c| laid_cell_to_ui(c, selected))
-            .collect();
+        let cells: Vec<ColumnCell> = laid.iter().map(|c| laid_cell_to_ui(c, selected)).collect();
         self.columns_model.set_vec(cells);
         self.column_cells = laid;
     }
@@ -544,12 +546,7 @@ impl App {
                     buf.push((path.to_path_buf(), state, recursive_mtime));
                 }
                 if has_pending_cb
-                    .compare_exchange(
-                        false,
-                        true,
-                        Ordering::AcqRel,
-                        Ordering::Acquire,
-                    )
+                    .compare_exchange(false, true, Ordering::AcqRel, Ordering::Acquire)
                     .is_ok()
                 {
                     let pending_cb2 = pending_cb.clone();
@@ -645,9 +642,7 @@ impl App {
             let pending = pending.clone();
             let has_pending = has_pending.clone();
             let on_progress: crate::dir_size::ProgressFn = Box::new(
-                move |path: &Path,
-                      state: SizeState,
-                      recursive_mtime: Option<SystemTime>| {
+                move |path: &Path, state: SizeState, recursive_mtime: Option<SystemTime>| {
                     // Scope filter: only paths directly visible in the
                     // current listing can affect a row. Everything else goes
                     // straight to the shared cache and is dropped here.
@@ -664,12 +659,7 @@ impl App {
                         buf.push((path.to_path_buf(), state, recursive_mtime));
                     }
                     if has_pending
-                        .compare_exchange(
-                            false,
-                            true,
-                            Ordering::AcqRel,
-                            Ordering::Acquire,
-                        )
+                        .compare_exchange(false, true, Ordering::AcqRel, Ordering::Acquire)
                         .is_ok()
                     {
                         let pending_cb = pending.clone();
@@ -696,9 +686,7 @@ impl App {
                                 if let Ok(mut app) = app.try_borrow_mut() {
                                     app.apply_size_updates(generation, drained);
                                 } else {
-                                    log::trace!(
-                                        "size update skipped: app already borrowed"
-                                    );
+                                    log::trace!("size update skipped: app already borrowed");
                                 }
                             });
                         });
@@ -823,9 +811,7 @@ impl App {
             .iter()
             .enumerate()
             .filter(|(_, e)| show_hidden || !e.hidden)
-            .filter(|(_, e)| {
-                search_lc.is_empty() || e.name.to_lowercase().contains(&search_lc)
-            })
+            .filter(|(_, e)| search_lc.is_empty() || e.name.to_lowercase().contains(&search_lc))
             .map(|(i, _)| i)
             .collect();
 
@@ -1059,14 +1045,18 @@ impl App {
     }
 
     fn select_only(&mut self, display_idx: usize) {
-        let Some(&eidx) = self.filtered.get(display_idx) else { return };
+        let Some(&eidx) = self.filtered.get(display_idx) else {
+            return;
+        };
         self.selection.clear();
         self.selection.insert(eidx);
         self.last_clicked = Some(eidx);
     }
 
     fn toggle_selection(&mut self, display_idx: usize) {
-        let Some(&eidx) = self.filtered.get(display_idx) else { return };
+        let Some(&eidx) = self.filtered.get(display_idx) else {
+            return;
+        };
         if !self.selection.insert(eidx) {
             self.selection.remove(&eidx);
         }
@@ -1312,7 +1302,9 @@ impl App {
             sources
         };
         for src in sources {
-            let Some(fname) = src.file_name() else { continue };
+            let Some(fname) = src.file_name() else {
+                continue;
+            };
             let target = unique_name(&dest, fname.to_string_lossy().as_ref());
             let r = match op {
                 ClipOp::Copy => copy_recursive(&src, &target),
@@ -1330,7 +1322,9 @@ impl App {
     }
 
     fn ctx_rename(&mut self) {
-        let Some(path) = self.selected_paths().into_iter().next() else { return };
+        let Some(path) = self.selected_paths().into_iter().next() else {
+            return;
+        };
         let Some(ui) = self.ui.upgrade() else { return };
         self.pending_rename = Some(path.clone());
         let name = path
@@ -1421,12 +1415,7 @@ impl App {
     /// into the subtree); the root cell zooms out (navigate to the
     /// current directory's parent). Files fall through to the OS
     /// default-handler, matching list/grid semantics.
-    fn on_column_cell_double_click(
-        &mut self,
-        path: PathBuf,
-        is_dir: bool,
-        is_root: bool,
-    ) {
+    fn on_column_cell_double_click(&mut self, path: PathBuf, is_dir: bool, is_root: bool) {
         if is_root {
             if let Some(parent) = self.current.parent() {
                 self.navigate(parent.to_path_buf());
@@ -1486,7 +1475,9 @@ impl App {
     }
 
     fn submit_rename_dialog(&mut self, new_name: String) {
-        let Some(old) = self.pending_rename.take() else { return };
+        let Some(old) = self.pending_rename.take() else {
+            return;
+        };
         let Some(parent) = old.parent() else { return };
         let new_path = parent.join(&new_name);
         if new_path == old {
@@ -1661,7 +1652,11 @@ impl App {
         let new_idx: Option<usize> =
             if t == slint::SharedString::from(slint::platform::Key::UpArrow).as_str() {
                 let step = cols;
-                if cur >= step { Some(cur - step) } else { Some(0) }
+                if cur >= step {
+                    Some(cur - step)
+                } else {
+                    Some(0)
+                }
             } else if t == slint::SharedString::from(slint::platform::Key::DownArrow).as_str() {
                 Some((cur + cols).min(n - 1))
             } else if t == slint::SharedString::from(slint::platform::Key::LeftArrow).as_str() {
@@ -1711,12 +1706,9 @@ impl App {
     /// the root.
     fn handle_key_columns(&mut self, t: &str) -> bool {
         let is_up = t == slint::SharedString::from(slint::platform::Key::UpArrow).as_str();
-        let is_down =
-            t == slint::SharedString::from(slint::platform::Key::DownArrow).as_str();
-        let is_left =
-            t == slint::SharedString::from(slint::platform::Key::LeftArrow).as_str();
-        let is_right =
-            t == slint::SharedString::from(slint::platform::Key::RightArrow).as_str();
+        let is_down = t == slint::SharedString::from(slint::platform::Key::DownArrow).as_str();
+        let is_left = t == slint::SharedString::from(slint::platform::Key::LeftArrow).as_str();
+        let is_right = t == slint::SharedString::from(slint::platform::Key::RightArrow).as_str();
         if !(is_up || is_down || is_left || is_right) {
             return false;
         }
@@ -1759,7 +1751,9 @@ impl App {
                 .enumerate()
                 .filter(|(_, c)| c.col == cur_col && c.y_start + EPS >= cur_y_end)
                 .min_by(|(_, a), (_, b)| {
-                    a.y_start.partial_cmp(&b.y_start).unwrap_or(std::cmp::Ordering::Equal)
+                    a.y_start
+                        .partial_cmp(&b.y_start)
+                        .unwrap_or(std::cmp::Ordering::Equal)
                 })
                 .map(|(i, _)| i)
         } else if is_up {
@@ -1769,7 +1763,9 @@ impl App {
                 .enumerate()
                 .filter(|(_, c)| c.col == cur_col && c.y_end <= cur_y_start + EPS)
                 .max_by(|(_, a), (_, b)| {
-                    a.y_end.partial_cmp(&b.y_end).unwrap_or(std::cmp::Ordering::Equal)
+                    a.y_end
+                        .partial_cmp(&b.y_end)
+                        .unwrap_or(std::cmp::Ordering::Equal)
                 })
                 .map(|(i, _)| i)
         } else if is_left {
@@ -1801,7 +1797,9 @@ impl App {
                         && c.y_start <= cur_y_end + EPS
                 })
                 .min_by(|(_, a), (_, b)| {
-                    a.y_start.partial_cmp(&b.y_start).unwrap_or(std::cmp::Ordering::Equal)
+                    a.y_start
+                        .partial_cmp(&b.y_start)
+                        .unwrap_or(std::cmp::Ordering::Equal)
                 })
                 .map(|(i, _)| i)
         };
@@ -1833,12 +1831,9 @@ impl App {
     /// to the largest.
     fn handle_key_treemap(&mut self, t: &str) -> bool {
         let is_up = t == slint::SharedString::from(slint::platform::Key::UpArrow).as_str();
-        let is_down =
-            t == slint::SharedString::from(slint::platform::Key::DownArrow).as_str();
-        let is_left =
-            t == slint::SharedString::from(slint::platform::Key::LeftArrow).as_str();
-        let is_right =
-            t == slint::SharedString::from(slint::platform::Key::RightArrow).as_str();
+        let is_down = t == slint::SharedString::from(slint::platform::Key::DownArrow).as_str();
+        let is_left = t == slint::SharedString::from(slint::platform::Key::LeftArrow).as_str();
+        let is_right = t == slint::SharedString::from(slint::platform::Key::RightArrow).as_str();
         if !(is_up || is_down || is_left || is_right) {
             return false;
         }
@@ -1854,8 +1849,8 @@ impl App {
         let anchor_display = self
             .last_clicked
             .and_then(|e| self.filtered.iter().position(|&f| f == e));
-        let cur_tile_idx: Option<usize> = anchor_display
-            .and_then(|a| self.treemap_tiles.iter().position(|c| c.row_index == a));
+        let cur_tile_idx: Option<usize> =
+            anchor_display.and_then(|a| self.treemap_tiles.iter().position(|c| c.row_index == a));
         let cur_tile_idx = match cur_tile_idx {
             Some(i) => i,
             None => {
@@ -2141,7 +2136,11 @@ mod tests {
             path: PathBuf::from(name),
             is_dir,
             size: if is_dir { 0 } else { size },
-            size_state: if is_dir { state } else { SizeState::Known(size) },
+            size_state: if is_dir {
+                state
+            } else {
+                SizeState::Known(size)
+            },
             modified: std::time::SystemTime::UNIX_EPOCH,
             hidden: false,
         }
@@ -2173,11 +2172,11 @@ mod tests {
         assert_eq!(
             got,
             vec![
-                "adir-big",      // 500, known, dir
-                "cfile-big",     // 100, known, file
-                "adir-small",    // 50, known, dir
-                "bfile-small",   // 10, known, file
-                "zdir-unknown",  // unknown (sinks below known in desc)
+                "adir-big",     // 500, known, dir
+                "cfile-big",    // 100, known, file
+                "adir-small",   // 50, known, dir
+                "bfile-small",  // 10, known, file
+                "zdir-unknown", // unknown (sinks below known in desc)
             ],
         );
     }
@@ -2437,7 +2436,9 @@ fn wire_callbacks(ui: &MainWindow, app: Rc<RefCell<App>>) {
         ui.on_rename_submitted(move |idx, name| {
             let mut a = app.borrow_mut();
             let idx = idx as usize;
-            let Some(&eidx) = a.filtered.get(idx) else { return };
+            let Some(&eidx) = a.filtered.get(idx) else {
+                return;
+            };
             let old = a.entries[eidx].path.clone();
             let Some(parent) = old.parent() else { return };
             let new_path = parent.join(name.as_str());
@@ -2501,7 +2502,9 @@ fn wire_callbacks(ui: &MainWindow, app: Rc<RefCell<App>>) {
         let app = app.clone();
         ui.on_menu_clicked(move || {
             // Show a context-style menu at a fixed position (top-right area).
-            let Some(ui) = app.borrow().ui.upgrade() else { return };
+            let Some(ui) = app.borrow().ui.upgrade() else {
+                return;
+            };
             ui.set_context_entries(ModelRc::from(Rc::new(VecModel::from(main_menu(
                 &app.borrow(),
             )))));
@@ -2528,7 +2531,8 @@ fn wire_callbacks(ui: &MainWindow, app: Rc<RefCell<App>>) {
         let app = app.clone();
         ui.on_columns_cell_double_clicked(move |path, is_dir, is_root| {
             let path = PathBuf::from(path.as_str());
-            app.borrow_mut().on_column_cell_double_click(path, is_dir, is_root);
+            app.borrow_mut()
+                .on_column_cell_double_click(path, is_dir, is_root);
         });
     }
     {
@@ -2623,7 +2627,11 @@ fn empty_menu(a: &App) -> Vec<MenuEntry> {
         },
         menu_separator(),
         menu_entry(
-            &tr(if a.show_hidden { "Hide hidden files" } else { "Show hidden files" }),
+            &tr(if a.show_hidden {
+                "Hide hidden files"
+            } else {
+                "Show hidden files"
+            }),
             "toggle-hidden",
             "Ctrl+H",
         ),
@@ -2635,7 +2643,11 @@ fn main_menu(a: &App) -> Vec<MenuEntry> {
     vec![
         menu_entry(&tr("New folder"), "new-folder", "Ctrl+Shift+N"),
         menu_entry(
-            &tr(if a.show_hidden { "Hide hidden files" } else { "Show hidden files" }),
+            &tr(if a.show_hidden {
+                "Hide hidden files"
+            } else {
+                "Show hidden files"
+            }),
             "toggle-hidden",
             "Ctrl+H",
         ),

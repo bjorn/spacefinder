@@ -35,10 +35,8 @@ fn parse_dir(s: &str) -> Result<PathBuf, String> {
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     let cli = Cli::parse();
 
-    env_logger::Builder::from_env(
-        env_logger::Env::default().default_filter_or("space=info,warn"),
-    )
-    .init();
+    env_logger::Builder::from_env(env_logger::Env::default().default_filter_or("space=info,warn"))
+        .init();
 
     // Load Rust-side translations from the bundled .po files.
     let lang = i18n::init();

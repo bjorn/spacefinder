@@ -30,7 +30,7 @@
 //! The controller is the only caller; this module is pure data massaging.
 
 use crate::dir_size::lookup_cached_size;
-use humansize::{format_size, BINARY};
+use humansize::{BINARY, format_size};
 use std::fs;
 use std::path::{Path, PathBuf};
 

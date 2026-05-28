@@ -53,8 +53,8 @@ mod tests {
 
     #[test]
     fn temp_dir_has_positive_space() {
-        let (avail, total) = free_and_total(&std::env::temp_dir())
-            .expect("statvfs on temp_dir should succeed");
+        let (avail, total) =
+            free_and_total(&std::env::temp_dir()).expect("statvfs on temp_dir should succeed");
         assert!(avail > 0, "available bytes should be > 0, got {}", avail);
         assert!(total > 0, "total bytes should be > 0, got {}", total);
         assert!(

@@ -1,5 +1,5 @@
 use chrono::{DateTime, Local};
-use humansize::{format_size, BINARY};
+use humansize::{BINARY, format_size};
 use std::fs;
 use std::os::unix::fs::MetadataExt;
 use std::path::{Path, PathBuf};

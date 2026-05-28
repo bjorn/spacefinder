@@ -112,7 +112,12 @@ fn save_to(path: &Path, config: &Config) {
     }
     // atomic rename; must be on same filesystem
     if let Err(e) = fs::rename(&tmp, path) {
-        warn!("failed to rename {} -> {}: {}", tmp.display(), path.display(), e);
+        warn!(
+            "failed to rename {} -> {}: {}",
+            tmp.display(),
+            path.display(),
+            e
+        );
         let _ = fs::remove_file(&tmp);
     }
 }
@@ -223,4 +228,3 @@ mod tests {
         assert_eq!(cfg, Config::default());
     }
 }
-

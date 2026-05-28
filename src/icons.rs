@@ -1,5 +1,5 @@
 use rustc_hash::FxHashMap;
-use slint::{Image, SharedPixelBuffer, Rgba8Pixel};
+use slint::{Image, Rgba8Pixel, SharedPixelBuffer};
 use std::cell::RefCell;
 use std::path::{Path, PathBuf};
 
@@ -87,4 +87,3 @@ fn load_builtin(bytes: &'static [u8]) -> Image {
         Image::from_rgba8(buf)
     })
 }
-

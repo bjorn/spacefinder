@@ -63,7 +63,9 @@ pub fn init() -> &'static str {
 fn detect_locale() -> String {
     for var in ["LC_ALL", "LC_MESSAGES", "LANG"] {
         if let Ok(v) = std::env::var(var)
-            && !v.is_empty() && v != "C" && v != "POSIX"
+            && !v.is_empty()
+            && v != "C"
+            && v != "POSIX"
         {
             return v;
         }
@@ -90,9 +92,17 @@ pub fn tr(s: &str) -> String {
 /// Translate a plural pair, picking the form for `n` ("n != 1" rule).
 pub fn tr_n(singular: &str, plural: &str, n: usize) -> String {
     if let Some((s_form, p_form)) = ACTIVE.get().and_then(|c| c.plural.get(singular)) {
-        return if n == 1 { s_form.clone() } else { p_form.clone() };
+        return if n == 1 {
+            s_form.clone()
+        } else {
+            p_form.clone()
+        };
     }
-    if n == 1 { singular.to_owned() } else { plural.to_owned() }
+    if n == 1 {
+        singular.to_owned()
+    } else {
+        plural.to_owned()
+    }
 }
 
 /// Convenience: translate then substitute `{}` placeholders, in order.
@@ -273,9 +283,7 @@ fn parse_po(src: &str) -> Catalog {
                     }
                 }
                 Last::Str(n) => {
-                    if let Some((_, last_s)) =
-                        strs.iter_mut().rev().find(|(idx, _)| *idx == n)
-                    {
+                    if let Some((_, last_s)) = strs.iter_mut().rev().find(|(idx, _)| *idx == n) {
                         last_s.push_str(&extra);
                     }
                 }

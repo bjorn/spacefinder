@@ -39,7 +39,7 @@
 //! directory, mirroring how the list and grid views consume
 //! `navigate`.
 
-use humansize::{format_size, BINARY};
+use humansize::{BINARY, format_size};
 
 /// Any tile with area smaller than this fraction of the usable area is
 /// dropped from the output. At a 1000×700 view that is roughly a single
@@ -119,7 +119,15 @@ pub fn lay_out(inputs: &[TileInput<'_>]) -> Vec<Tile> {
         .iter()
         .map(|e| e.size as f32 / total as f32)
         .collect();
-    let rects = squarify(&sizes, Rect { x: 0.0, y: 0.0, w: 1.0, h: 1.0 });
+    let rects = squarify(
+        &sizes,
+        Rect {
+            x: 0.0,
+            y: 0.0,
+            w: 1.0,
+            h: 1.0,
+        },
+    );
 
     let mut tiles = Vec::with_capacity(usable.len());
     for (e, r) in usable.into_iter().zip(rects.into_iter()) {
@@ -166,7 +174,12 @@ struct Rect {
 /// the sub-rectangle that the committed row leaves behind.
 fn squarify(sizes: &[f32], rect: Rect) -> Vec<Rect> {
     let mut out: Vec<Rect> = vec![
-        Rect { x: 0.0, y: 0.0, w: 0.0, h: 0.0 };
+        Rect {
+            x: 0.0,
+            y: 0.0,
+            w: 0.0,
+            h: 0.0
+        };
         sizes.len()
     ];
     let mut remaining = rect;
@@ -251,12 +264,7 @@ fn worst_aspect(row: &[usize], extra: Option<f32>, sizes: &[f32], shorter: f32) 
 /// thickness matches the row's total size. The strip spans the shorter
 /// side of the remaining rectangle; `remaining` is then shrunk to the
 /// sub-rectangle left over.
-fn layout_row(
-    row: &[usize],
-    sizes: &[f32],
-    remaining: &mut Rect,
-    out: &mut [Rect],
-) {
+fn layout_row(row: &[usize], sizes: &[f32], remaining: &mut Rect, out: &mut [Rect]) {
     let row_sum: f32 = row.iter().map(|&i| sizes[i]).sum();
     if row_sum <= 0.0 {
         return;
