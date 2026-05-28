@@ -17,6 +17,11 @@ msgctxt "MainWindow"
 msgid "Confirm"
 msgstr ""
 
+#: ui/main.slint
+msgctxt "MainWindow"
+msgid "Legend"
+msgstr ""
+
 #: ui/dialogs.slint:55 ui/dialogs.slint:76
 msgctxt "RenameDialog"
 msgid "Rename"

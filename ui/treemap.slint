@@ -23,17 +23,56 @@ export struct Tile {
     h: float,
 }
 
-// One entry in the treemap's file-type legend: a category's color
-// swatch and its label. The controller supplies only the categories
-// actually present in the current directory.
+// One entry in the file-type legend: a category's color swatch and its
+// label. The controller supplies only the categories actually present
+// in the current directory.
 export struct LegendItem {
     label: string,
     color: color,
 }
 
+// Compact floating legend listing the file-type categories present in
+// the current directory. It sizes itself to its content (like
+// `ContextMenu`) so the caller can position it in a corner as an
+// overlay without it consuming layout space. Visibility is driven by
+// the caller via `visible`.
+export component Legend inherits Rectangle {
+    in property <[LegendItem]> items;
+
+    background: Theme.bg-elevated;
+    border-color: Theme.border;
+    border-width: 1px;
+    border-radius: Theme.radius-small;
+    drop-shadow-color: #00000088;
+    drop-shadow-blur: 14px;
+    drop-shadow-offset-y: 4px;
+    width: rows.preferred-width;
+    height: rows.preferred-height;
+
+    rows := VerticalLayout {
+        padding: 6px;
+        spacing: 3px;
+        for item in root.items : HorizontalLayout {
+            spacing: 6px;
+            Rectangle {
+                width: 11px;
+                height: 11px;
+                border-radius: 2px;
+                background: item.color;
+                y: (parent.height - self.height) / 2;
+            }
+            Text {
+                text: item.label;
+                color: Theme.text-muted;
+                font-size: 11px;
+                vertical-alignment: center;
+            }
+        }
+    }
+}
+
 export component TreemapView inherits Rectangle {
     in property <[Tile]> tiles;
-    in property <[LegendItem]> legend;
     // Single left-click: select the tile (ctrl toggles within the
     // existing selection; shift is unused in the treemap because a
     // rectangular range doesn't map naturally onto squarified tiles).
@@ -92,39 +131,6 @@ export component TreemapView inherits Rectangle {
             clicked(ctrl) => { root.tile-clicked(tile.index, ctrl); }
             double-clicked => { root.tile-double-clicked(tile.index); }
             right-clicked(x, y) => { root.tile-right-clicked(tile.index, x, y); }
-        }
-    }
-
-    // File-type legend, overlaid in the bottom-right corner. Hidden
-    // when there is nothing to show (e.g. an empty directory). It sits
-    // outside `inner` so it does not capture tile clicks; pointer
-    // events pass through to the tiles or background beneath it.
-    if root.legend.length > 0 : Rectangle {
-        x: root.width - self.width - root.pad - 4px;
-        y: root.height - self.height - root.pad - 4px;
-        background: Theme.bg-elevated;
-        border-color: Theme.border;
-        border-width: 1px;
-        border-radius: Theme.radius-small;
-        VerticalLayout {
-            padding: 6px;
-            spacing: 3px;
-            for item in root.legend : HorizontalLayout {
-                spacing: 6px;
-                Rectangle {
-                    width: 11px;
-                    height: 11px;
-                    border-radius: 2px;
-                    background: item.color;
-                    y: (parent.height - self.height) / 2;
-                }
-                Text {
-                    text: item.label;
-                    color: Theme.text-muted;
-                    font-size: 11px;
-                    vertical-alignment: center;
-                }
-            }
         }
     }
 }

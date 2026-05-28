@@ -4,7 +4,7 @@ import { Sidebar, SidebarItem } from "sidebar.slint";
 import { FileListView, FileItem, FileListState } from "file_list.slint";
 import { FileGridView } from "file_grid.slint";
 import { ColumnsView, ColumnCell } from "columns_view.slint";
-import { TreemapView, Tile, LegendItem } from "treemap.slint";
+import { TreemapView, Legend, Tile, LegendItem } from "treemap.slint";
 import { ContextMenu, MenuEntry } from "context_menu.slint";
 import { RenameDialog, NewFolderDialog, ConfirmDialog } from "dialogs.slint";
 
@@ -39,8 +39,11 @@ export component MainWindow inherits Window {
     in property <[ColumnCell]> column-cells;
     // Squarified treemap view state.
     in property <[Tile]> treemap-tiles;
-    // File-type legend shown over the treemap.
+    // File-type legend shown over the treemap and columns views.
     in property <[LegendItem]> treemap-legend;
+    // Whether the "Legend" status-bar entry is being hovered. Drives
+    // the floating legend overlay's visibility.
+    property <bool> legend-hovered: false;
 
     // Context menu state
     in property <[MenuEntry]> context-entries;
@@ -193,7 +196,6 @@ export component MainWindow inherits Window {
                     }
                     if root.view-mode == 3 : TreemapView {
                         tiles: root.treemap-tiles;
-                        legend: root.treemap-legend;
                         tile-clicked(i, ctrl) => {
                             // Share the list/grid click handler. Pass
                             // `shift = false` since range-select makes
@@ -217,12 +219,27 @@ export component MainWindow inherits Window {
                         HorizontalLayout {
                             padding-left: 12px;
                             padding-right: 12px;
+                            spacing: 12px;
                             Text {
                                 text: root.status-text;
                                 color: Theme.text-muted;
                                 font-size: 12px;
                                 vertical-alignment: center;
                                 horizontal-stretch: 1;
+                            }
+                            // "Legend" entry: hovering it reveals the
+                            // floating color legend. Shown only in the
+                            // colorized views (columns, treemap) and
+                            // only when there are categories to list.
+                            if (root.view-mode == 2 || root.view-mode == 3) && root.treemap-legend.length > 0 : Text {
+                                text: @tr("Legend");
+                                color: legend-touch.has-hover ? Theme.text : Theme.text-muted;
+                                font-size: 12px;
+                                vertical-alignment: center;
+                                horizontal-alignment: right;
+                                legend-touch := TouchArea {
+                                    changed has-hover => { root.legend-hovered = self.has-hover; }
+                                }
                             }
                             Text {
                                 text: root.device-text;
@@ -236,6 +253,16 @@ export component MainWindow inherits Window {
                 }
             }
         }
+    }
+
+    // Floating file-type legend. Shown only while the status-bar
+    // "Legend" entry is hovered. It floats in the bottom-right corner
+    // above the content (clear of the 22px status bar) and is content-
+    // sized, so it never consumes layout space or covers the views.
+    if root.legend-hovered && root.treemap-legend.length > 0 : Legend {
+        items: root.treemap-legend;
+        x: root.width - self.width - 12px;
+        y: root.height - self.height - 30px;
     }
 
     // Context menu overlay.
