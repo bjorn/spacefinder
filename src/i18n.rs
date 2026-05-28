@@ -25,8 +25,8 @@ const RUST_CONTEXT: &str = "Rust";
 /// English source strings are intentionally NOT translated (the file just
 /// pins the canonical msgids).
 const CATALOGS: &[(&str, &str)] = &[
-    ("de", include_str!("../lang/de/LC_MESSAGES/space.po")),
-    ("en", include_str!("../lang/en/LC_MESSAGES/space.po")),
+    ("de", include_str!("../lang/de/LC_MESSAGES/spacefinder.po")),
+    ("en", include_str!("../lang/en/LC_MESSAGES/spacefinder.po")),
 ];
 
 #[derive(Default)]

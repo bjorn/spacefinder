@@ -16,7 +16,7 @@ use std::path::PathBuf;
 
 /// CLI surface. `--help` and `--version` are auto-wired by clap.
 #[derive(Parser)]
-#[command(name = "space", version, about, long_about = None)]
+#[command(name = "spacefinder", version, about, long_about = None)]
 struct Cli {
     /// Directory to open. Defaults to the last-opened directory, or the home
     /// directory on first run.
@@ -35,8 +35,10 @@ fn parse_dir(s: &str) -> Result<PathBuf, String> {
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     let cli = Cli::parse();
 
-    env_logger::Builder::from_env(env_logger::Env::default().default_filter_or("space=info,warn"))
-        .init();
+    env_logger::Builder::from_env(
+        env_logger::Env::default().default_filter_or("spacefinder=info,warn"),
+    )
+    .init();
 
     // Load Rust-side translations from the bundled .po files.
     let lang = i18n::init();

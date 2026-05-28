@@ -1,18 +1,24 @@
 [package]
-name = "space"
+name = "spacefinder"
 version = "0.1.0"
 edition = "2024"
 rust-version = "1.90"
 license = "GPL-3.0-only"
-description = "A disk-space cleanup tool — find old, bulky, or redundant files and clear them out."
+description = "A disk-space cleanup tool: find old, bulky, or redundant files and clear them out."
+repository = "https://github.com/bjorn/spacefinder"
+readme = "README.md"
+authors = ["Thorbjørn Lindeijer <bjorn@lindeijer.nl>"]
+keywords = ["disk", "cleanup", "storage", "treemap", "filesystem"]
+categories = ["filesystem", "gui", "visualization"]
+include = ["src/**/*", "ui/**/*", "lang/**/*", "build.rs", "LICENSE", "README.md"]
 
 [dependencies]
 slint = "1.16"
 walkdir = "2.5"
-trash = { git = "https://github.com/jackpot51/trash-rs.git", branch = "cosmic" }
+trash = "5"
 dirs = "6.0"
 freedesktop-icons = "0.4"
-xdg-mime = { git = "https://github.com/ebassi/xdg-mime-rs" }
+xdg-mime = "0.4"
 mime_guess = "2"
 arboard = { version = "3", default-features = false, features = ["wayland-data-control"] }
 open = "5.3"
@@ -32,3 +38,21 @@ tempfile = "3"
 
 [build-dependencies]
 slint-build = "1.16"
+
+[profile.release]
+strip = true
+
+[package.metadata.packager]
+product-name = "Space"
+identifier = "nl.lindeijer.spacefinder"
+description = "A disk-space cleanup tool: find old, bulky, or redundant files and clear them out."
+authors = ["Thorbjørn Lindeijer <bjorn@lindeijer.nl>"]
+homepage = "https://github.com/bjorn/spacefinder"
+license_file = "LICENSE"
+icons = [
+    "assets/spacefinder-32.png",
+    "assets/spacefinder-64.png",
+    "assets/spacefinder-128.png",
+    "assets/spacefinder-256.png",
+    "assets/spacefinder-512.png",
+]

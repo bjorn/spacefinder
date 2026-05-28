@@ -51,7 +51,7 @@ pub fn config_path() -> PathBuf {
         .filter(|p| !p.as_os_str().is_empty())
         .or_else(|| dirs::home_dir().map(|h| h.join(".config")))
         .unwrap_or_else(|| PathBuf::from(".config"));
-    base.join("space").join("config.json")
+    base.join("spacefinder").join("config.json")
 }
 
 pub fn load() -> Config {
@@ -128,7 +128,7 @@ mod tests {
     use tempfile::TempDir;
 
     fn cfg_path(dir: &TempDir) -> PathBuf {
-        dir.path().join("space").join("config.json")
+        dir.path().join("spacefinder").join("config.json")
     }
 
     #[test]
