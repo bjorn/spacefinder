@@ -33,12 +33,33 @@
 use jwalk::rayon::{ThreadPool, ThreadPoolBuilder};
 use jwalk::{Parallelism, WalkDirGeneric};
 use rustc_hash::{FxHashMap, FxHashSet};
-use std::os::unix::fs::MetadataExt;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, LazyLock, Mutex};
 use std::time::SystemTime;
 
 use crate::fs_scan::{SizeState, on_disk_bytes};
+
+/// Returns `true` if `meta` is a hardlinked file already counted in this walk.
+///
+/// On Unix we dedupe by `(dev, ino)` so each inode is summed once, matching
+/// `du`'s default. Std metadata does not expose link counts or inode ids on
+/// other platforms, so the dedup is a no-op there.
+#[cfg(unix)]
+fn already_counted_hardlink(
+    meta: &std::fs::Metadata,
+    seen_inodes: &mut FxHashSet<(u64, u64)>,
+) -> bool {
+    use std::os::unix::fs::MetadataExt;
+    meta.nlink() > 1 && !seen_inodes.insert((meta.dev(), meta.ino()))
+}
+
+#[cfg(not(unix))]
+fn already_counted_hardlink(
+    _meta: &std::fs::Metadata,
+    _seen_inodes: &mut FxHashSet<(u64, u64)>,
+) -> bool {
+    false
+}
 
 type CacheKey = (PathBuf, SystemTime);
 
@@ -219,7 +240,7 @@ fn walk_and_aggregate(root: &Path, pool: Arc<ThreadPool>, on_progress: &Progress
                     // symlink's own size.
                     if let Ok(meta) = entry.metadata() {
                         // Dedupe hardlinks so each inode is counted once per walk.
-                        if meta.nlink() > 1 && !seen_inodes.insert((meta.dev(), meta.ino())) {
+                        if already_counted_hardlink(&meta, &mut seen_inodes) {
                             continue;
                         }
                         let bytes = on_disk_bytes(&meta);
