@@ -4,11 +4,11 @@ import { Sidebar, SidebarItem } from "sidebar.slint";
 import { FileListView, FileItem, FileListState } from "file_list.slint";
 import { FileGridView } from "file_grid.slint";
 import { ColumnsView, ColumnCell } from "columns_view.slint";
-import { TreemapView, Tile } from "treemap.slint";
+import { TreemapView, Tile, LegendItem } from "treemap.slint";
 import { ContextMenu, MenuEntry } from "context_menu.slint";
 import { RenameDialog, NewFolderDialog, ConfirmDialog } from "dialogs.slint";
 
-export { FileListState, ColumnCell, Tile }
+export { FileListState, ColumnCell, Tile, LegendItem }
 
 export component MainWindow inherits Window {
     title: "Space";
@@ -39,6 +39,8 @@ export component MainWindow inherits Window {
     in property <[ColumnCell]> column-cells;
     // Squarified treemap view state.
     in property <[Tile]> treemap-tiles;
+    // File-type legend shown over the treemap.
+    in property <[LegendItem]> treemap-legend;
 
     // Context menu state
     in property <[MenuEntry]> context-entries;
@@ -191,6 +193,7 @@ export component MainWindow inherits Window {
                     }
                     if root.view-mode == 3 : TreemapView {
                         tiles: root.treemap-tiles;
+                        legend: root.treemap-legend;
                         tile-clicked(i, ctrl) => {
                             // Share the list/grid click handler. Pass
                             // `shift = false` since range-select makes

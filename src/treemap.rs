@@ -66,6 +66,9 @@ pub struct TileInput<'a> {
     /// "pending" styling (dimmed text, trailing `+` on totals) once
     /// we add back that treatment.
     pub pending: bool,
+    /// Fill color as RGB, derived from the entry's file-type category.
+    /// Directories pass a neutral color.
+    pub color: (u8, u8, u8),
 }
 
 /// A positioned tile in the squarified layout. Mirrors the Slint
@@ -83,6 +86,8 @@ pub struct Tile {
     pub size_text: String,
     pub is_dir: bool,
     pub pending: bool,
+    /// Fill color as RGB, carried through from the matching `TileInput`.
+    pub color: (u8, u8, u8),
     pub x: f32,
     pub y: f32,
     pub w: f32,
@@ -140,6 +145,7 @@ pub fn lay_out(inputs: &[TileInput<'_>]) -> Vec<Tile> {
             size_text: format_size(e.size, BINARY),
             is_dir: e.is_dir,
             pending: e.pending,
+            color: e.color,
             x: r.x,
             y: r.y,
             w: r.w,
@@ -400,6 +406,7 @@ mod tests {
                 is_dir: false,
                 size: 100,
                 pending: false,
+                color: (0, 0, 0),
             },
             TileInput {
                 row_index: 9,
@@ -407,6 +414,7 @@ mod tests {
                 is_dir: true,
                 size: 0,
                 pending: true,
+                color: (0, 0, 0),
             },
             TileInput {
                 row_index: 11,
@@ -414,6 +422,7 @@ mod tests {
                 is_dir: false,
                 size: 900,
                 pending: false,
+                color: (0, 0, 0),
             },
         ];
         let tiles = lay_out(&inputs);
