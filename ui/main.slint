@@ -227,10 +227,19 @@ export component MainWindow inherits Window {
                                 vertical-alignment: center;
                                 horizontal-stretch: 1;
                             }
+                            Text {
+                                text: root.device-text;
+                                color: Theme.text-muted;
+                                font-size: 12px;
+                                vertical-alignment: center;
+                                horizontal-alignment: right;
+                            }
                             // "Legend" entry: hovering it reveals the
                             // floating color legend. Shown only in the
-                            // colorized views (columns, treemap) and
-                            // only when there are categories to list.
+                            // colorized views (columns, treemap) and only
+                            // when there are categories to list. Kept as the
+                            // rightmost item so it aligns under the floating
+                            // legend popup in the bottom-right corner.
                             if (root.view-mode == 2 || root.view-mode == 3) && root.treemap-legend.length > 0 : Text {
                                 text: @tr("Legend");
                                 color: legend-touch.has-hover ? Theme.text : Theme.text-muted;
@@ -240,13 +249,6 @@ export component MainWindow inherits Window {
                                 legend-touch := TouchArea {
                                     changed has-hover => { root.legend-hovered = self.has-hover; }
                                 }
-                            }
-                            Text {
-                                text: root.device-text;
-                                color: Theme.text-muted;
-                                font-size: 12px;
-                                vertical-alignment: center;
-                                horizontal-alignment: right;
                             }
                         }
                     }
