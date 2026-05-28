@@ -52,6 +52,19 @@ operations with undo, watcher-based auto-refresh.
 Slint's built-in translation system handles i18n via gettext `.po` files
 compiled into the binary by `build.rs`.
 
+## Installing
+
+Space is published on crates.io as **`spacefinder`** (the name `space` was
+already taken). It currently targets **Linux** only.
+
+```
+cargo install spacefinder
+```
+
+That installs a `spacefinder` binary. Prebuilt Linux bundles (AppImage and
+`.deb`) are attached to each
+[GitHub release](https://github.com/bjorn/spacefinder/releases).
+
 ## Building
 
 ```
@@ -68,15 +81,15 @@ faster rebuilds across checkouts.
 ## Running
 
 ```
-space [PATH]
+spacefinder [PATH]
 ```
 
 With no argument the app restores the last-opened directory (or falls
 back to `$HOME` on first run). Pass `PATH` to open a specific directory,
 `--help` for the full CLI, or `--version`.
 
-Preferences are stored at `$XDG_CONFIG_HOME/space/config.json` (typically
-`~/.config/space/config.json`).
+Preferences are stored at `$XDG_CONFIG_HOME/spacefinder/config.json` (typically
+`~/.config/spacefinder/config.json`).
 
 Switch views via the four toggle buttons in the header (list, grid,
 columns, treemap). Right-click for the context menu. F2 renames, Delete
@@ -84,10 +97,10 @@ moves to trash, F5 refreshes. Ctrl+L focuses the path bar.
 
 ## Status
 
-Prototype. Usable for browsing and basic cleanup, but the scope of the
-project is larger than what ships today. Bug reports and suggestions
-welcome via the issue tracker at
-[todo.sr.ht/~thorbjorn/space](https://todo.sr.ht/~thorbjorn/space).
+Prototype, Linux only for now. Usable for browsing and basic cleanup, but
+the scope of the project is larger than what ships today. Bug reports and
+suggestions welcome via the
+[issue tracker](https://github.com/bjorn/spacefinder/issues).
 
 ## License
 
