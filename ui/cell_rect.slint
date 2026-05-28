@@ -42,20 +42,26 @@ export component CellRect inherits Rectangle {
         border-color: Theme.border;
         border-radius: 2px;
         // File tiles in colorize mode are tinted by their type category.
-        // The category color is mixed toward the dark background so the
-        // white name/size labels stay legible. Selection, press, and
-        // hover states still win, and directories keep the neutral
-        // elevated fill regardless of colorize.
-        property <color> base-fill: (root.colorize && !root.is-dir)
-            ? root.category-color.mix(Theme.bg-component, 55%)
+        // At rest the category color is mixed heavily toward the dark
+        // background so the white name/size labels stay legible; on hover
+        // it brightens to a more saturated shade of the same category
+        // color (instead of the generic gray) for clearer feedback.
+        // Directories and non-colorized cells keep the neutral fills and
+        // the gray hover. Selection and press still win.
+        property <bool> tinted: root.colorize && !root.is-dir;
+        property <color> rest-fill: tinted
+            ? root.category-color.mix(Theme.bg-component, 30%)
             : (root.is-dir ? Theme.bg-elevated : Theme.bg-component);
+        property <color> hover-fill: tinted
+            ? root.category-color.mix(Theme.bg-component, 65%)
+            : Theme.bg-hover;
         background: root.selected
             ? Theme.selection-bg
             : touch.pressed
                 ? Theme.bg-pressed
                 : touch.has-hover
-                    ? Theme.bg-hover
-                    : base-fill;
+                    ? hover-fill
+                    : rest-fill;
     }
 
     // Name label. Inline mode: claims the space to the left of the
