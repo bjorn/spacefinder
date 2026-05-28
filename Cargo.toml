@@ -8,7 +8,6 @@ description = "A disk-space cleanup tool — find old, bulky, or redundant files
 
 [dependencies]
 slint = "1.16"
-tokio = { version = "1", features = ["rt-multi-thread", "macros", "fs", "sync", "time"] }
 walkdir = "2.5"
 trash = { git = "https://github.com/jackpot51/trash-rs.git", branch = "cosmic" }
 dirs = "6.0"
