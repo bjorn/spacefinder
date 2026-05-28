@@ -56,6 +56,11 @@ jobs:
   # name), publish manually with `cargo publish`.
   crate:
     runs-on: ubuntu-latest
+    # Gate crate publishing behind the "release" environment. Configure it
+    # under Settings > Environments with required reviewers so each publish
+    # needs manual approval, and reference the same environment name in the
+    # crates.io Trusted Publisher config.
+    environment: release
     permissions:
       id-token: write
       contents: read
