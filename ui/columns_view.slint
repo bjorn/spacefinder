@@ -12,6 +12,9 @@ export struct ColumnCell {
     path: string,
     is-root: bool,
     selected: bool,
+    // Fill color derived from the file's type category. Directories
+    // get a neutral color so the file colors stand out.
+    category-color: color,
 }
 
 export component ColumnsView inherits Rectangle {
@@ -53,6 +56,8 @@ export component ColumnsView inherits Rectangle {
             is-dir: cell.is-dir;
             pending: cell.pending;
             selected: cell.selected;
+            category-color: cell.category-color;
+            colorize: true;
 
             clicked(_ctrl) => { root.cell-clicked(cell.path); }
             double-clicked => { root.cell-double-clicked(cell.path, cell.is-dir, cell.is-root); }

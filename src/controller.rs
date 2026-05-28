@@ -2083,6 +2083,7 @@ fn format_total(bytes: u64, pending: bool) -> String {
 /// column-selected path.
 fn laid_cell_to_ui(c: &LaidCell, selected: Option<&Path>) -> ColumnCell {
     let is_selected = selected.map(|p| p == c.path.as_path()).unwrap_or(false);
+    let (r, g, b) = c.category.map(|cat| cat.rgb()).unwrap_or(DIR_TILE_RGB);
     ColumnCell {
         name: c.name.clone().into(),
         size_text: c.size_text.clone().into(),
@@ -2094,6 +2095,7 @@ fn laid_cell_to_ui(c: &LaidCell, selected: Option<&Path>) -> ColumnCell {
         path: c.path.to_string_lossy().to_string().into(),
         is_root: c.is_root,
         selected: is_selected,
+        category_color: slint::Color::from_rgb_u8(r, g, b),
     }
 }
 
