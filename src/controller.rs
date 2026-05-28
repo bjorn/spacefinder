@@ -381,16 +381,15 @@ impl App {
         // If a preceding `go_up` requested it, re-select the child
         // directory we just left so it stays highlighted (and becomes
         // the keyboard-focus anchor). One-shot.
-        if let Some(name) = self.select_after_navigate.take() {
-            if let Some(&eidx) = self
+        if let Some(name) = self.select_after_navigate.take()
+            && let Some(&eidx) = self
                 .filtered
                 .iter()
                 .find(|&&e| self.entries[e].name == name)
-            {
-                self.selection.clear();
-                self.selection.insert(eidx);
-                self.last_clicked = Some(eidx);
-            }
+        {
+            self.selection.clear();
+            self.selection.insert(eidx);
+            self.last_clicked = Some(eidx);
         }
         self.push_ui_state();
         self.spawn_size_jobs();
@@ -512,13 +511,13 @@ impl App {
         }
         // Every directory path referenced by a currently-laid cell.
         for i in 0..self.columns_model.row_count() {
-            if let Some(cell) = self.columns_model.row_data(i) {
-                if cell.is_dir {
-                    let p = PathBuf::from(cell.path.as_str());
-                    visible.insert(p.clone());
-                    if let Ok(canon) = std::fs::canonicalize(&p) {
-                        visible.insert(canon);
-                    }
+            if let Some(cell) = self.columns_model.row_data(i)
+                && cell.is_dir
+            {
+                let p = PathBuf::from(cell.path.as_str());
+                visible.insert(p.clone());
+                if let Ok(canon) = std::fs::canonicalize(&p) {
+                    visible.insert(canon);
                 }
             }
         }
@@ -846,10 +845,10 @@ impl App {
         // hidden-files toggle) hides a previously-selected file.
         let visible: FxHashSet<usize> = self.filtered.iter().copied().collect();
         self.selection.retain(|eidx| visible.contains(eidx));
-        if let Some(e) = self.last_clicked {
-            if !visible.contains(&e) {
-                self.last_clicked = None;
-            }
+        if let Some(e) = self.last_clicked
+            && !visible.contains(&e)
+        {
+            self.last_clicked = None;
         }
     }
 
@@ -1218,10 +1217,8 @@ impl App {
         let entry = self.entries[eidx].clone();
         if entry.is_dir {
             self.navigate(entry.path);
-        } else {
-            if let Err(e) = open::that_detached(&entry.path) {
-                log::warn!("open failed: {}", e);
-            }
+        } else if let Err(e) = open::that_detached(&entry.path) {
+            log::warn!("open failed: {}", e);
         }
     }
 
@@ -1258,10 +1255,10 @@ impl App {
         // back to a display position for `double_click`, which still
         // takes display indices since that's what the click callbacks
         // hand it.
-        if let Some(eidx) = self.last_clicked {
-            if let Some(display_idx) = self.filtered.iter().position(|&e| e == eidx) {
-                self.double_click(display_idx);
-            }
+        if let Some(eidx) = self.last_clicked
+            && let Some(display_idx) = self.filtered.iter().position(|&e| e == eidx)
+        {
+            self.double_click(display_idx);
         }
     }
 

@@ -62,10 +62,10 @@ pub fn init() -> &'static str {
 
 fn detect_locale() -> String {
     for var in ["LC_ALL", "LC_MESSAGES", "LANG"] {
-        if let Ok(v) = std::env::var(var) {
-            if !v.is_empty() && v != "C" && v != "POSIX" {
-                return v;
-            }
+        if let Ok(v) = std::env::var(var)
+            && !v.is_empty() && v != "C" && v != "POSIX"
+        {
+            return v;
         }
     }
     String::new()
@@ -169,10 +169,10 @@ fn parse_po(src: &str) -> Catalog {
                     if !s0.is_empty() && !s1.is_empty() {
                         cat.plural.insert(id, (s0, s1));
                     }
-                } else if let Some(s) = singular_str.take() {
-                    if !s.is_empty() {
-                        cat.singular.insert(id, s);
-                    }
+                } else if let Some(s) = singular_str.take()
+                    && !s.is_empty()
+                {
+                    cat.singular.insert(id, s);
                 }
             }
         }
@@ -191,7 +191,7 @@ fn parse_po(src: &str) -> Catalog {
     }
     let mut last = Last::None;
 
-    while let Some(raw) = lines.next() {
+    for raw in lines {
         let line = raw.trim();
         if line.is_empty() || line.starts_with('#') {
             if line.is_empty() {
