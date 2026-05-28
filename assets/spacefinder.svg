@@ -1,0 +1,12 @@
+<svg width="512" height="512" viewBox="0 0 512 512" xmlns="http://www.w3.org/2000/svg">
+  <!-- Placeholder app icon: a treemap motif echoing the app's size view.
+       Replace with a real design before a polished release. -->
+  <rect x="16" y="16" width="480" height="480" rx="96" fill="#20223A"/>
+  <g>
+    <rect x="56"  y="56"  width="236" height="236" rx="10" fill="#5B8DEF"/>
+    <rect x="56"  y="304" width="236" height="152" rx="10" fill="#2DD4BF"/>
+    <rect x="304" y="56"  width="152" height="152" rx="10" fill="#4ADE80"/>
+    <rect x="304" y="220" width="152" height="100" rx="10" fill="#FBBF24"/>
+    <rect x="304" y="332" width="152" height="124" rx="10" fill="#F87171"/>
+  </g>
+</svg>
