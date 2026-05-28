@@ -254,3 +254,58 @@ msgstr "{} von {} ausgewählt, {} von {}"
 msgctxt "Rust"
 msgid "{} free of {}"
 msgstr "{} frei von {}"
+
+#: src/category.rs
+msgctxt "Rust"
+msgid "Code"
+msgstr "Code"
+
+#: src/category.rs
+msgctxt "Rust"
+msgid "Images"
+msgstr "Bilder"
+
+#: src/category.rs
+msgctxt "Rust"
+msgid "Video"
+msgstr "Videos"
+
+#: src/category.rs
+msgctxt "Rust"
+msgid "Audio"
+msgstr "Audio"
+
+#: src/category.rs
+msgctxt "Rust"
+msgid "Archives"
+msgstr "Archive"
+
+#: src/category.rs
+msgctxt "Rust"
+msgid "Databases"
+msgstr "Datenbanken"
+
+#: src/category.rs
+msgctxt "Rust"
+msgid "Executables"
+msgstr "Programme"
+
+#: src/category.rs
+msgctxt "Rust"
+msgid "Fonts"
+msgstr "Schriftarten"
+
+#: src/category.rs
+msgctxt "Rust"
+msgid "Config"
+msgstr "Konfiguration"
+
+#: src/category.rs
+msgctxt "Rust"
+msgid "Data"
+msgstr "Daten"
+
+#: src/category.rs
+msgctxt "Rust"
+msgid "Other"
+msgstr "Sonstiges"

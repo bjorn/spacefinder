@@ -516,7 +516,7 @@ impl App {
             .map(|c| {
                 let (r, g, b) = c.rgb();
                 LegendItem {
-                    label: c.label().into(),
+                    label: tr(c.label()).into(),
                     color: slint::Color::from_rgb_u8(r, g, b),
                 }
             })
