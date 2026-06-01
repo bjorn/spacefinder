@@ -58,9 +58,12 @@ authors = ["Thorbjørn Lindeijer <bjorn@lindeijer.nl>"]
 homepage = "https://github.com/bjorn/spacefinder"
 license_file = "LICENSE"
 icons = [
+    "assets/spacefinder-16.png",
     "assets/spacefinder-32.png",
+    "assets/spacefinder-48.png",
     "assets/spacefinder-64.png",
     "assets/spacefinder-128.png",
     "assets/spacefinder-256.png",
     "assets/spacefinder-512.png",
+    "assets/spacefinder.ico",
 ]
