@@ -29,6 +29,7 @@
 //!
 //! The controller is the only caller; this module is pure data massaging.
 
+use crate::category::FileCategory;
 use crate::dir_size::lookup_cached_size;
 use humansize::{BINARY, format_size};
 use std::fs;
@@ -64,6 +65,9 @@ pub struct LaidCell {
     pub path: PathBuf,
     pub pending: bool,
     pub is_root: bool,
+    /// File-type category for color-coding, mirroring `Entry::category`.
+    /// `None` for directories, which keep the neutral fill.
+    pub category: Option<FileCategory>,
 }
 
 /// Quick snapshot of a directory entry for layout. We only need the
@@ -78,6 +82,8 @@ struct RawChild {
     size: u64,
     /// Directory whose size is not yet in the cache.
     pending: bool,
+    /// File-type category. `None` for directories.
+    category: Option<FileCategory>,
 }
 
 fn read_children(parent: &Path, show_hidden: bool) -> Vec<RawChild> {
@@ -105,12 +111,18 @@ fn read_children(parent: &Path, show_hidden: bool) -> Vec<RawChild> {
         } else {
             (crate::fs_scan::on_disk_bytes(&meta), false)
         };
+        let category = if is_dir {
+            None
+        } else {
+            Some(FileCategory::from_path(&path))
+        };
         out.push(RawChild {
             name,
             path,
             is_dir,
             size,
             pending,
+            category,
         });
     }
     out
@@ -152,6 +164,7 @@ pub fn lay_out(root: &Path, show_hidden: bool) -> Vec<LaidCell> {
         path: root.to_path_buf(),
         pending: root_pending,
         is_root: true,
+        category: None,
     });
 
     lay_out_children(root, 0.0, 1.0, 1, show_hidden, &mut cells);
@@ -221,6 +234,7 @@ fn lay_out_children(
             path: e.path.clone(),
             pending: e.pending,
             is_root: false,
+            category: e.category,
         });
         if e.is_dir {
             lay_out_children(&e.path, cursor, cell_y_end, depth + 1, show_hidden, cells);

@@ -11,6 +11,10 @@ export component CellRect inherits Rectangle {
     in property <bool> is-dir;
     in property <bool> pending;
     in property <bool> selected;
+    // File-type category fill color. Only applied when `colorize` is
+    // true (the treemap opts in; the columns view leaves it off).
+    in property <color> category-color;
+    in property <bool> colorize: false;
     // Stack the size below the name on a second row, both left-aligned.
     // The treemap uses this layout; its wide-but-short tiles read more
     // naturally with the label on two rows than with the size right-
@@ -37,13 +41,27 @@ export component CellRect inherits Rectangle {
         border-width: 1.5px;
         border-color: Theme.border;
         border-radius: 2px;
+        // File tiles in colorize mode are tinted by their type category.
+        // At rest the category color is mixed heavily toward the dark
+        // background so the white name/size labels stay legible; on hover
+        // it brightens to a more saturated shade of the same category
+        // color (instead of the generic gray) for clearer feedback.
+        // Directories and non-colorized cells keep the neutral fills and
+        // the gray hover. Selection and press still win.
+        property <bool> tinted: root.colorize && !root.is-dir;
+        property <color> rest-fill: tinted
+            ? root.category-color.mix(Theme.bg-component, 30%)
+            : (root.is-dir ? Theme.bg-elevated : Theme.bg-component);
+        property <color> hover-fill: tinted
+            ? root.category-color.mix(Theme.bg-component, 40%)
+            : Theme.bg-hover;
         background: root.selected
             ? Theme.selection-bg
             : touch.pressed
                 ? Theme.bg-pressed
                 : touch.has-hover
-                    ? Theme.bg-hover
-                    : root.is-dir ? Theme.bg-elevated : Theme.bg-component;
+                    ? hover-fill
+                    : rest-fill;
     }
 
     // Name label. Inline mode: claims the space to the left of the

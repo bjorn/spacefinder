@@ -1,3 +1,4 @@
+use crate::category::FileCategory;
 use crate::columns::{self, LaidCell};
 use crate::config::{self, Config};
 use crate::dir_size::{self, SizeEngine};
@@ -7,7 +8,7 @@ use crate::i18n::{tr, tr_fmt, tr_n_fmt};
 use crate::icons::Icons;
 use crate::sidebar::{self, TRASH_TAG};
 use crate::treemap::{self, Tile as LaidTile};
-use crate::{ColumnCell, Crumb, FileItem, FileListState, MainWindow, MenuEntry, Tile};
+use crate::{ColumnCell, Crumb, FileItem, FileListState, LegendItem, MainWindow, MenuEntry, Tile};
 use humansize::{BINARY, format_size};
 use rustc_hash::FxHashSet;
 use slint::{ComponentHandle, Global, Model, ModelRc, SharedString, VecModel};
@@ -22,6 +23,10 @@ use std::time::{Duration, Instant, SystemTime};
 /// state changes inside this window are coalesced into a single follow-up
 /// save scheduled via `slint::Timer::single_shot`.
 const PERSIST_DEBOUNCE: Duration = Duration::from_millis(500);
+
+/// Neutral RGB used for directory tiles, so the file-type colors stand
+/// out against them. Matches the dark theme's elevated surface tone.
+const DIR_TILE_RGB: (u8, u8, u8) = (0x6e, 0x6e, 0x78);
 
 thread_local! {
     /// Handle to the running `App`, set in [`App::new`]. Background size
@@ -118,6 +123,10 @@ pub struct App {
     /// for arrow-key navigation without reparsing data back out of the
     /// Slint model.
     treemap_tiles: Vec<LaidTile>,
+    /// Shared Slint model backing the treemap's file-type legend.
+    /// Rebuilt by `recompute_treemap` to list only the categories
+    /// present in the current directory.
+    treemap_legend_model: Rc<VecModel<LegendItem>>,
     /// Last-observed window size, in logical pixels. Refreshed on every
     /// `persist()` call so a final `on_close_requested` save catches the
     /// latest dimensions.
@@ -161,6 +170,8 @@ impl App {
         ui.set_column_cells(ModelRc::from(columns_model.clone()));
         let treemap_model = Rc::new(VecModel::<Tile>::default());
         ui.set_treemap_tiles(ModelRc::from(treemap_model.clone()));
+        let treemap_legend_model = Rc::new(VecModel::<LegendItem>::default());
+        ui.set_treemap_legend(ModelRc::from(treemap_legend_model.clone()));
 
         // Translate the persisted sort column enum into the controller's
         // runtime enum. Keep the two types decoupled so the on-disk format
@@ -196,6 +207,7 @@ impl App {
             column_cells: Vec::new(),
             treemap_model,
             treemap_tiles: Vec::new(),
+            treemap_legend_model,
             window_size: cfg.window_size,
             last_save: None,
             save_scheduled: Rc::new(Cell::new(false)),
@@ -466,12 +478,14 @@ impl App {
                     }
                 };
                 let pending = matches!(e.size_state, SizeState::Calculating);
+                let color = e.category.map(|c| c.rgb()).unwrap_or(DIR_TILE_RGB);
                 treemap::TileInput {
                     row_index: display_idx,
                     name: e.name.as_str(),
                     is_dir: e.is_dir,
                     size,
                     pending,
+                    color,
                 }
             })
             .collect();
@@ -482,6 +496,32 @@ impl App {
             .collect();
         self.treemap_model.set_vec(tiles);
         self.treemap_tiles = laid;
+        self.rebuild_treemap_legend();
+    }
+
+    /// Rebuild the treemap legend to list only the file-type categories
+    /// present among the currently filtered files, in the canonical
+    /// `FileCategory::ALL` order so the legend stays stable as the
+    /// directory changes.
+    fn rebuild_treemap_legend(&self) {
+        let mut present: FxHashSet<FileCategory> = FxHashSet::default();
+        for &eidx in &self.filtered {
+            if let Some(cat) = self.entries[eidx].category {
+                present.insert(cat);
+            }
+        }
+        let items: Vec<LegendItem> = FileCategory::ALL
+            .iter()
+            .filter(|c| present.contains(c))
+            .map(|c| {
+                let (r, g, b) = c.rgb();
+                LegendItem {
+                    label: tr(c.label()).into(),
+                    color: slint::Color::from_rgb_u8(r, g, b),
+                }
+            })
+            .collect();
+        self.treemap_legend_model.set_vec(items);
     }
 
     /// Schedule directory-size computation for every directory path
@@ -2043,6 +2083,7 @@ fn format_total(bytes: u64, pending: bool) -> String {
 /// column-selected path.
 fn laid_cell_to_ui(c: &LaidCell, selected: Option<&Path>) -> ColumnCell {
     let is_selected = selected.map(|p| p == c.path.as_path()).unwrap_or(false);
+    let (r, g, b) = c.category.map(|cat| cat.rgb()).unwrap_or(DIR_TILE_RGB);
     ColumnCell {
         name: c.name.clone().into(),
         size_text: c.size_text.clone().into(),
@@ -2054,6 +2095,7 @@ fn laid_cell_to_ui(c: &LaidCell, selected: Option<&Path>) -> ColumnCell {
         path: c.path.to_string_lossy().to_string().into(),
         is_root: c.is_root,
         selected: is_selected,
+        category_color: slint::Color::from_rgb_u8(r, g, b),
     }
 }
 
@@ -2066,6 +2108,7 @@ fn laid_cell_to_ui(c: &LaidCell, selected: Option<&Path>) -> ColumnCell {
 fn laid_tile_to_ui(c: &LaidTile, selection: &FxHashSet<usize>, filtered: &[usize]) -> Tile {
     let eidx = filtered.get(c.row_index).copied();
     let selected = eidx.map(|e| selection.contains(&e)).unwrap_or(false);
+    let (r, g, b) = c.color;
     Tile {
         index: c.row_index as i32,
         name: c.name.clone().into(),
@@ -2077,6 +2120,7 @@ fn laid_tile_to_ui(c: &LaidTile, selection: &FxHashSet<usize>, filtered: &[usize
         is_dir: c.is_dir,
         pending: c.pending,
         selected,
+        category_color: slint::Color::from_rgb_u8(r, g, b),
     }
 }
 
@@ -2143,6 +2187,11 @@ mod tests {
             },
             modified: std::time::SystemTime::UNIX_EPOCH,
             hidden: false,
+            category: if is_dir {
+                None
+            } else {
+                Some(FileCategory::from_path(Path::new(name)))
+            },
         }
     }
 

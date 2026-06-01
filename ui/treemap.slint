@@ -11,6 +11,9 @@ export struct Tile {
     is-dir: bool,
     pending: bool,
     selected: bool,
+    // Fill color derived from the file's type category. Directories
+    // get a neutral color so the file colors stand out.
+    category-color: color,
     // Fractional coords in [0, 1], relative to the view's usable area.
     // Rust computes these; the Slint side multiplies by the live inner
     // width/height so a window resize reflows with no round-trip.
@@ -18,6 +21,54 @@ export struct Tile {
     y: float,
     w: float,
     h: float,
+}
+
+// One entry in the file-type legend: a category's color swatch and its
+// label. The controller supplies only the categories actually present
+// in the current directory.
+export struct LegendItem {
+    label: string,
+    color: color,
+}
+
+// Compact floating legend listing the file-type categories present in
+// the current directory. It sizes itself to its content (like
+// `ContextMenu`) so the caller can position it in a corner as an
+// overlay without it consuming layout space. Visibility is driven by
+// the caller via `visible`.
+export component Legend inherits Rectangle {
+    in property <[LegendItem]> items;
+
+    background: Theme.bg-elevated;
+    border-color: Theme.border;
+    border-width: 1px;
+    border-radius: Theme.radius-small;
+    drop-shadow-color: #00000088;
+    drop-shadow-blur: 14px;
+    drop-shadow-offset-y: 4px;
+    width: rows.preferred-width;
+    height: rows.preferred-height;
+
+    rows := VerticalLayout {
+        padding: 6px;
+        spacing: 3px;
+        for item in root.items : HorizontalLayout {
+            spacing: 6px;
+            Rectangle {
+                width: 11px;
+                height: 11px;
+                border-radius: 2px;
+                background: item.color;
+                y: (parent.height - self.height) / 2;
+            }
+            Text {
+                text: item.label;
+                color: Theme.text-muted;
+                font-size: 11px;
+                vertical-alignment: center;
+            }
+        }
+    }
 }
 
 export component TreemapView inherits Rectangle {
@@ -73,6 +124,8 @@ export component TreemapView inherits Rectangle {
             is-dir: tile.is-dir;
             pending: tile.pending;
             selected: tile.selected;
+            category-color: tile.category-color;
+            colorize: true;
             stacked: true;
 
             clicked(ctrl) => { root.tile-clicked(tile.index, ctrl); }

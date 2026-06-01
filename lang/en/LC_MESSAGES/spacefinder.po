@@ -17,6 +17,11 @@ msgctxt "MainWindow"
 msgid "Confirm"
 msgstr ""
 
+#: ui/main.slint
+msgctxt "MainWindow"
+msgid "Legend"
+msgstr ""
+
 #: ui/dialogs.slint:55 ui/dialogs.slint:76
 msgctxt "RenameDialog"
 msgid "Rename"
@@ -248,4 +253,59 @@ msgstr ""
 #: src/controller.rs
 msgctxt "Rust"
 msgid "{} free of {}"
+msgstr ""
+
+#: src/category.rs
+msgctxt "Rust"
+msgid "Code"
+msgstr ""
+
+#: src/category.rs
+msgctxt "Rust"
+msgid "Images"
+msgstr ""
+
+#: src/category.rs
+msgctxt "Rust"
+msgid "Video"
+msgstr ""
+
+#: src/category.rs
+msgctxt "Rust"
+msgid "Audio"
+msgstr ""
+
+#: src/category.rs
+msgctxt "Rust"
+msgid "Archives"
+msgstr ""
+
+#: src/category.rs
+msgctxt "Rust"
+msgid "Databases"
+msgstr ""
+
+#: src/category.rs
+msgctxt "Rust"
+msgid "Executables"
+msgstr ""
+
+#: src/category.rs
+msgctxt "Rust"
+msgid "Fonts"
+msgstr ""
+
+#: src/category.rs
+msgctxt "Rust"
+msgid "Config"
+msgstr ""
+
+#: src/category.rs
+msgctxt "Rust"
+msgid "Data"
+msgstr ""
+
+#: src/category.rs
+msgctxt "Rust"
+msgid "Other"
 msgstr ""

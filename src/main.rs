@@ -1,5 +1,6 @@
 slint::include_modules!();
 
+mod category;
 mod columns;
 mod config;
 mod controller;

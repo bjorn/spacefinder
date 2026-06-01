@@ -1,3 +1,4 @@
+use crate::category::FileCategory;
 use chrono::{DateTime, Local};
 use humansize::{BINARY, format_size};
 use std::fs;
@@ -48,6 +49,9 @@ pub struct Entry {
     pub size_state: SizeState,
     pub modified: SystemTime,
     pub hidden: bool,
+    /// File-type category for color-coding. `None` for directories,
+    /// which render with a neutral color.
+    pub category: Option<FileCategory>,
 }
 
 impl Entry {
@@ -96,6 +100,11 @@ pub fn scan(dir: &Path) -> std::io::Result<Vec<Entry>> {
             SizeState::Known(size)
         };
         let modified = meta.modified().unwrap_or(SystemTime::UNIX_EPOCH);
+        let category = if is_dir {
+            None
+        } else {
+            Some(FileCategory::from_path(&path))
+        };
         out.push(Entry {
             name,
             path,
@@ -104,6 +113,7 @@ pub fn scan(dir: &Path) -> std::io::Result<Vec<Entry>> {
             size_state,
             modified,
             hidden,
+            category,
         });
     }
     Ok(out)
