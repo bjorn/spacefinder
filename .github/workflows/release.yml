@@ -9,9 +9,8 @@ env:
   CARGO_TERM_COLOR: always
 
 jobs:
-  # Build the Linux bundles (AppImage + .deb) and attach them to a GitHub
-  # Release for the tag. Space is Linux-only for now; macOS/Windows targets
-  # can be added here once the platform-specific code is ported.
+  # Build the Linux bundles (AppImage + .deb) for the tag and attach them
+  # to the GitHub Release.
   binaries:
     runs-on: ubuntu-latest
     permissions:
@@ -47,6 +46,29 @@ jobs:
           files: |
             target/release/*.AppImage
             target/release/*.deb
+          generate_release_notes: true
+
+  # Build the Windows installer (NSIS setup.exe) and attach it to the same
+  # GitHub Release for the tag.
+  binaries-windows:
+    runs-on: windows-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v6
+      - uses: Swatinem/rust-cache@v2
+      - name: Build release
+        run: cargo build --release --verbose
+      - name: Test
+        run: cargo test --release
+      - name: Install cargo-packager
+        run: cargo install cargo-packager --locked
+      - name: Package
+        run: cargo packager --release
+      - name: Publish GitHub release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: target/release/*-setup.exe
           generate_release_notes: true
 
   # Publish to crates.io using Trusted Publishing (OIDC, no stored token).

@@ -46,11 +46,7 @@ impl Default for Config {
 }
 
 pub fn config_path() -> PathBuf {
-    let base = std::env::var_os("XDG_CONFIG_HOME")
-        .map(PathBuf::from)
-        .filter(|p| !p.as_os_str().is_empty())
-        .or_else(|| dirs::home_dir().map(|h| h.join(".config")))
-        .unwrap_or_else(|| PathBuf::from(".config"));
+    let base = dirs::config_dir().unwrap_or_else(|| PathBuf::from(".config"));
     base.join("spacefinder").join("config.json")
 }
 

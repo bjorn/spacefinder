@@ -17,10 +17,7 @@ slint = "1.16"
 walkdir = "2.5"
 trash = "5"
 dirs = "6.0"
-freedesktop-icons = "0.4"
-xdg-mime = "0.4"
 mime_guess = "2"
-arboard = { version = "3", default-features = false, features = ["wayland-data-control"] }
 open = "5.3"
 log = "0.4"
 env_logger = "0.11"
@@ -30,8 +27,19 @@ rustc-hash = "2.1"
 jwalk = "0.8"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
-libc = "0.2"
 clap = { version = "4.6.1", features = ["derive"] }
+
+[target.'cfg(target_os = "linux")'.dependencies]
+freedesktop-icons = "0.4"
+xdg-mime = "0.4"
+arboard = { version = "3", default-features = false, features = ["wayland-data-control"] }
+libc = "0.2"
+
+[target.'cfg(not(target_os = "linux"))'.dependencies]
+arboard = { version = "3", default-features = false }
+
+[target.'cfg(windows)'.dependencies]
+windows-sys = { version = "0.59", features = ["Win32_Storage_FileSystem", "Win32_Foundation"] }
 
 [dev-dependencies]
 tempfile = "3"
@@ -50,9 +58,12 @@ authors = ["Thorbjørn Lindeijer <bjorn@lindeijer.nl>"]
 homepage = "https://github.com/bjorn/spacefinder"
 license_file = "LICENSE"
 icons = [
+    "assets/spacefinder-16.png",
     "assets/spacefinder-32.png",
+    "assets/spacefinder-48.png",
     "assets/spacefinder-64.png",
     "assets/spacefinder-128.png",
     "assets/spacefinder-256.png",
     "assets/spacefinder-512.png",
+    "assets/spacefinder.ico",
 ]

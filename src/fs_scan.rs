@@ -2,19 +2,29 @@ use crate::category::FileCategory;
 use chrono::{DateTime, Local};
 use humansize::{BINARY, format_size};
 use std::fs;
-use std::os::unix::fs::MetadataExt;
 use std::path::{Path, PathBuf};
 use std::time::SystemTime;
 
-/// Bytes this file consumes on disk. Matches `du` (counts allocated 512-byte
-/// blocks, the `st_blocks` field) rather than `ls -l` (the declared length).
+/// Bytes this file consumes on disk. On Unix this matches `du` (allocated
+/// 512-byte blocks, the `st_blocks` field) rather than `ls -l` (the declared
+/// length).
 ///
 /// For a disk-cleanup tool the on-disk figure is what actually matters:
 ///   * sparse files declare more than they allocate (VM images, some logs);
 ///   * filesystem compression (BTRFS, ZFS) shrinks allocated bytes;
 ///   * tiny files still occupy a whole cluster.
+///
+/// On non-Unix platforms the allocated size is not available through std
+/// metadata, so we fall back to the apparent length.
+#[cfg(unix)]
 pub fn on_disk_bytes(meta: &fs::Metadata) -> u64 {
+    use std::os::unix::fs::MetadataExt;
     meta.blocks().saturating_mul(512)
+}
+
+#[cfg(not(unix))]
+pub fn on_disk_bytes(meta: &fs::Metadata) -> u64 {
+    meta.len()
 }
 
 /// State of a directory-size computation for an `Entry`.

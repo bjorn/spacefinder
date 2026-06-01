@@ -1,12 +1,19 @@
+#[cfg(target_os = "linux")]
 use rustc_hash::FxHashMap;
 use slint::{Image, Rgba8Pixel, SharedPixelBuffer};
+#[cfg(target_os = "linux")]
 use std::cell::RefCell;
-use std::path::{Path, PathBuf};
+use std::path::Path;
+#[cfg(target_os = "linux")]
+use std::path::PathBuf;
 
-/// Icon cache. Resolves MIME/icon names via the freedesktop icon theme
-/// (`freedesktop-icons`) and the `xdg-mime` crate for MIME detection.
+/// Icon cache. On Linux it can resolve MIME/icon names via the freedesktop
+/// icon theme (`freedesktop-icons`) and the `xdg-mime` crate for MIME
+/// detection; elsewhere only the bundled built-in SVG icons are used.
 pub struct Icons {
+    #[cfg(target_os = "linux")]
     mime_db: xdg_mime::SharedMimeInfo,
+    #[cfg(target_os = "linux")]
     cache: RefCell<FxHashMap<String, Image>>,
     folder: Image,
     file: Image,
@@ -18,7 +25,9 @@ pub struct Icons {
 impl Icons {
     pub fn new() -> Self {
         Self {
+            #[cfg(target_os = "linux")]
             mime_db: xdg_mime::SharedMimeInfo::new(),
+            #[cfg(target_os = "linux")]
             cache: RefCell::default(),
             folder: load_builtin(include_bytes!("../ui/icons/folder.svg")),
             file: load_builtin(include_bytes!("../ui/icons/file.svg")),
@@ -57,6 +66,7 @@ impl Icons {
 
     /// Lookup a freedesktop icon by name; returns None if not found in any
     /// theme on this system.
+    #[cfg(target_os = "linux")]
     pub fn by_name(&self, name: &str) -> Option<Image> {
         if let Some(img) = self.cache.borrow().get(name).cloned() {
             return Some(img);
@@ -73,6 +83,7 @@ impl Icons {
     }
 }
 
+#[cfg(target_os = "linux")]
 fn load_path(path: &PathBuf) -> Option<Image> {
     // Slint can load PNG/SVG from disk directly.
     Image::load_from_path(path).ok()

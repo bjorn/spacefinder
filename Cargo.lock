@@ -4839,6 +4839,7 @@ dependencies = [
  "tempfile",
  "trash",
  "walkdir",
+ "windows-sys 0.59.0",
  "xdg-mime",
 ]
 
