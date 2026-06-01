@@ -512,6 +512,7 @@ mod tests {
     /// Container overlay storage hardlinks shared files across layer dirs; without
     /// this, reported sizes balloon (the motivating case: a 480 MiB podman layer
     /// that reported 2.65 GiB).
+    #[cfg(unix)]
     #[test]
     fn hardlinks_counted_once_per_walk() {
         let nanos = SystemTime::now()
