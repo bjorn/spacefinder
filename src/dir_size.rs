@@ -154,6 +154,34 @@ pub fn lookup_cached_total(dir: &Path) -> Option<(u64, Option<SystemTime>)> {
     lookup_cached(dir).map(|(_, agg)| (agg.size, agg.recursive_mtime))
 }
 
+/// Drop cache entries for every path in `paths` and for all of their
+/// ancestor directories. Call after a filesystem mutation under those
+/// paths so ancestors keep showing the correct total. A directory's own
+/// mtime changes only when its direct children do; when contents change
+/// deeper in the subtree, the mtime up the chain stays the same and the
+/// cache key still matches, serving the pre-mutation size on the next
+/// lookup. Removing those entries forces a fresh walk.
+pub fn invalidate_ancestors_of_paths<I, P>(paths: I)
+where
+    I: IntoIterator<Item = P>,
+    P: AsRef<Path>,
+{
+    let mut targets: FxHashSet<PathBuf> = FxHashSet::default();
+    for p in paths {
+        let mut cur: Option<PathBuf> = Some(p.as_ref().to_path_buf());
+        while let Some(x) = cur {
+            if let Ok(c) = std::fs::canonicalize(&x) {
+                targets.insert(c);
+            }
+            targets.insert(x.clone());
+            cur = x.parent().map(|q| q.to_path_buf());
+        }
+    }
+    if let Ok(mut cache) = CACHE.lock() {
+        cache.retain(|(k, _mtime), _| !targets.contains(k));
+    }
+}
+
 /// Perform the full walk for `root`, populate the cache, and emit
 /// `on_progress` for every directory encountered.
 fn walk_and_aggregate(root: &Path, pool: Arc<ThreadPool>, on_progress: &ProgressFn) {

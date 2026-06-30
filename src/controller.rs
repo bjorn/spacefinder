@@ -76,6 +76,13 @@ pub struct App {
     /// Bumped on every navigation / refresh. Stale size results carrying
     /// an older generation are dropped by [`App::on_size_update`].
     generation: u64,
+    /// `self.current` from the previous `refresh()` call, used to
+    /// distinguish a same-directory refresh (where we can compare the
+    /// pre- and post-scan totals to detect a change and invalidate
+    /// ancestor caches) from a navigation to a different directory
+    /// (where any total delta is just a different folder, not a
+    /// mutation).
+    last_refreshed_dir: Option<PathBuf>,
     /// Parallel directory-size computer.
     size_engine: Arc<SizeEngine>,
 
@@ -200,6 +207,7 @@ impl App {
             pending_rename: None,
             items_model,
             generation: 0,
+            last_refreshed_dir: None,
             size_engine: Arc::new(SizeEngine::new()),
             view_mode,
             column_selected_path: None,
@@ -337,6 +345,20 @@ impl App {
         // a previous scan get dropped.
         self.generation = self.generation.wrapping_add(1);
 
+        // Detect a same-directory refresh whose total has changed (a delete
+        // or paste inside, or an external edit picked up by F5). When that
+        // happens, the cached totals for `self.current` and its ancestors
+        // are stale: their own mtime did not move, so a fresh lookup would
+        // still hit the pre-change size. Snapshot the pre-scan sum here;
+        // the comparison and the actual invalidation happen after the
+        // cache backfill below.
+        let same_dir = self.last_refreshed_dir.as_ref() == Some(&self.current);
+        let prev_total: u64 = if same_dir {
+            self.entries.iter().map(|e| e.effective_size()).sum()
+        } else {
+            0
+        };
+
         // Selection is keyed on `entries` indices. Re-scanning replaces
         // the vector, which would otherwise orphan those indices onto
         // whatever rows happened to land at the same positions —
@@ -381,6 +403,16 @@ impl App {
                 }
             }
         }
+        // Same-directory refresh whose total moved: ancestor caches are
+        // stale. Drop the cached totals for `self.current` and every
+        // ancestor so the next visit re-walks them fresh.
+        if same_dir {
+            let new_total: u64 = self.entries.iter().map(|e| e.effective_size()).sum();
+            if new_total != prev_total {
+                dir_size::invalidate_ancestors_of_paths([&self.current]);
+            }
+        }
+        self.last_refreshed_dir = Some(self.current.clone());
         // Re-resolve the snapshot against the new entries. Files that
         // were deleted, moved, or renamed drop out naturally — exactly
         // what the user expects after a trash or delete.
