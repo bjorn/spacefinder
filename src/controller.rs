@@ -1502,6 +1502,16 @@ impl App {
                     }
                 }
                 dir_size::invalidate_ancestors_of_paths(&paths);
+                // Kick a walk of the trash files dir. Its size moved when
+                // the file landed there, but its parents (~/.local/share,
+                // ~/.local, ~) did not bump mtime, so their cached totals
+                // would still hit and serve a pre-trash value. The walk's
+                // cache-write-time check propagates the staleness up that
+                // chain without us having to compute it.
+                if let Some(trash_files) = dirs::data_dir().map(|d| d.join("Trash/files")) {
+                    let noop: dir_size::ProgressFn = Box::new(|_, _, _| {});
+                    self.size_engine.compute(trash_files, self.generation, noop);
+                }
                 self.refresh();
             }
             Some(ConfirmAction::PermanentDelete(paths)) => {
