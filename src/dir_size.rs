@@ -66,7 +66,14 @@ fn already_counted_hardlink(
 /// direct child add/remove, which is misleading for "last modified"). The
 /// dir's own mtime at walk time is stored too as the validity stamp: a
 /// lookup compares it against the live mtime and treats a mismatch as a
-/// cache miss.
+/// miss.
+///
+/// `recursive_mtime` does double duty as the stale flag: explicit
+/// invalidation and the cache-write-time propagation set it to `None`
+/// rather than removing the entry. `lookup_cached` then treats `None` as
+/// a miss (forcing a re-walk), but the entry stays in the map so the
+/// next walk can compare its new size against the prior one and
+/// propagate the invalidation further up the chain.
 #[derive(Copy, Clone, Debug)]
 struct CachedAgg {
     own_mtime: SystemTime,
@@ -131,14 +138,16 @@ impl SizeEngine {
 }
 
 /// Look up a dir's cached aggregate. Returns `(canonical_path, agg)` on a
-/// fresh hit, or `None` if there is no entry or the dir's mtime has moved
-/// since the entry was written.
+/// fresh hit, or `None` if there is no entry, the entry has been marked
+/// stale (`recursive_mtime == None`), or the dir's mtime has moved since
+/// the entry was written.
 fn lookup_cached(dir: &Path) -> Option<(PathBuf, CachedAgg)> {
     let canon = std::fs::canonicalize(dir).ok()?;
     let current_mtime = std::fs::metadata(&canon).ok()?.modified().ok()?;
     let cache = CACHE.lock().ok()?;
     let agg = cache.get(&canon).copied()?;
-    (agg.own_mtime == current_mtime).then_some((canon, agg))
+    let fresh = agg.recursive_mtime.is_some() && agg.own_mtime == current_mtime;
+    fresh.then_some((canon, agg))
 }
 
 /// Synchronous cache probe for callers that need just the size. Returns
@@ -158,13 +167,16 @@ pub fn lookup_cached_total(dir: &Path) -> Option<(u64, Option<SystemTime>)> {
     lookup_cached(dir).map(|(_, agg)| (agg.size, agg.recursive_mtime))
 }
 
-/// Drop cache entries for every path in `paths` and for all of their
-/// ancestor directories. Call after a filesystem mutation under those
-/// paths so ancestors keep showing the correct total. A directory's own
-/// mtime changes only when its direct children do; when contents change
-/// deeper in the subtree, the mtime up the chain stays the same and the
-/// cache key still matches, serving the pre-mutation size on the next
-/// lookup. Removing those entries forces a fresh walk.
+/// Mark cache entries for every path in `paths` and for all of their
+/// ancestor directories as stale. Call after a filesystem mutation under
+/// those paths so ancestors stop serving their pre-mutation total. A
+/// directory's own mtime changes only when its direct children do; when
+/// contents change deeper in the subtree the mtime up the chain stays
+/// the same and the cache would still hit, so we need this explicit
+/// signal. Setting `recursive_mtime = None` flips lookup to miss while
+/// preserving the prior `size`, so a subsequent walk can compare its
+/// new value against the old one and the cache-write-time check can
+/// propagate the staleness further up.
 pub fn invalidate_ancestors_of_paths<I, P>(paths: I)
 where
     I: IntoIterator<Item = P>,
@@ -182,7 +194,27 @@ where
         }
     }
     if let Ok(mut cache) = CACHE.lock() {
-        cache.retain(|k, _| !targets.contains(k));
+        for path in &targets {
+            if let Some(entry) = cache.get_mut(path) {
+                entry.recursive_mtime = None;
+            }
+        }
+    }
+}
+
+/// Mark cache entries for every ancestor of `path` (not `path` itself)
+/// as stale. Used by `walk_and_aggregate`'s cache-write-time check when
+/// a freshly walked dir's size differs from the prior cached size: the
+/// dir itself has just been updated with the correct value, but the
+/// ancestor totals built on the old value need to re-walk.
+///
+/// Delegates to [`invalidate_ancestors_of_paths`] on `path.parent()`:
+/// that function walks upward starting from each path it is given, so
+/// starting from the parent yields exactly the "ancestors of `path`"
+/// set with no code duplication.
+fn mark_ancestors_stale(path: &Path) {
+    if let Some(parent) = path.parent() {
+        invalidate_ancestors_of_paths(std::iter::once(parent));
     }
 }
 
@@ -341,8 +373,17 @@ fn walk_and_aggregate(root: &Path, pool: Arc<ThreadPool>, on_progress: &Progress
                 size: subtotal,
                 recursive_mtime: Some(max_mtime),
             };
-            if let Ok(mut cache) = CACHE.lock() {
-                cache.insert(dir.clone(), agg);
+            let prior_size = match CACHE.lock() {
+                Ok(mut cache) => cache.insert(dir.clone(), agg).map(|p| p.size),
+                Err(_) => None,
+            };
+            if let Some(prev) = prior_size {
+                if prev != subtotal {
+                    // The dir's size moved since we last walked it. Any
+                    // ancestor total that included the old value is now
+                    // stale; flag them so the next visit re-walks.
+                    mark_ancestors_stale(&dir);
+                }
             }
             on_progress(&dir, SizeState::Known(subtotal), agg.recursive_mtime);
         }
