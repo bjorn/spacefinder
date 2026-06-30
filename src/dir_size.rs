@@ -61,18 +61,20 @@ fn already_counted_hardlink(
     false
 }
 
-type CacheKey = (PathBuf, SystemTime);
-
 /// Cached per-directory aggregate: total on-disk bytes plus the most recent
 /// mtime seen anywhere in the subtree (the dir's own mtime reflects only
-/// direct child add/remove, which is misleading for "last modified").
+/// direct child add/remove, which is misleading for "last modified"). The
+/// dir's own mtime at walk time is stored too as the validity stamp: a
+/// lookup compares it against the live mtime and treats a mismatch as a
+/// cache miss.
 #[derive(Copy, Clone, Debug)]
 struct CachedAgg {
+    own_mtime: SystemTime,
     size: u64,
     recursive_mtime: Option<SystemTime>,
 }
 
-static CACHE: LazyLock<Mutex<FxHashMap<CacheKey, CachedAgg>>> =
+static CACHE: LazyLock<Mutex<FxHashMap<PathBuf, CachedAgg>>> =
     LazyLock::new(|| Mutex::new(FxHashMap::default()));
 
 /// Callback invoked for every directory whose size is settled during a walk.
@@ -115,8 +117,8 @@ impl SizeEngine {
     pub fn compute(&self, dir: PathBuf, _generation: u64, on_progress: ProgressFn) {
         // Fast path: cache hit for the top-level dir. This is the common case
         // when re-navigating into a previously-walked tree.
-        if let Some((key, agg)) = lookup_cached(&dir) {
-            on_progress(&key.0, SizeState::Known(agg.size), agg.recursive_mtime);
+        if let Some((canon, agg)) = lookup_cached(&dir) {
+            on_progress(&canon, SizeState::Known(agg.size), agg.recursive_mtime);
             return;
         }
 
@@ -128,13 +130,15 @@ impl SizeEngine {
     }
 }
 
-/// Look up a dir's cached aggregate. Returns `(canonical_key, agg)` on hit.
-fn lookup_cached(dir: &Path) -> Option<(CacheKey, CachedAgg)> {
+/// Look up a dir's cached aggregate. Returns `(canonical_path, agg)` on a
+/// fresh hit, or `None` if there is no entry or the dir's mtime has moved
+/// since the entry was written.
+fn lookup_cached(dir: &Path) -> Option<(PathBuf, CachedAgg)> {
     let canon = std::fs::canonicalize(dir).ok()?;
-    let mtime = std::fs::metadata(&canon).ok()?.modified().ok()?;
-    let key = (canon, mtime);
+    let current_mtime = std::fs::metadata(&canon).ok()?.modified().ok()?;
     let cache = CACHE.lock().ok()?;
-    cache.get(&key).copied().map(|a| (key, a))
+    let agg = cache.get(&canon).copied()?;
+    (agg.own_mtime == current_mtime).then_some((canon, agg))
 }
 
 /// Synchronous cache probe for callers that need just the size. Returns
@@ -178,7 +182,7 @@ where
         }
     }
     if let Ok(mut cache) = CACHE.lock() {
-        cache.retain(|(k, _mtime), _| !targets.contains(k));
+        cache.retain(|k, _| !targets.contains(k));
     }
 }
 
@@ -333,11 +337,12 @@ fn walk_and_aggregate(root: &Path, pool: Arc<ThreadPool>, on_progress: &Progress
             // best-effort sum: any unreadable descendants simply don't
             // contribute their bytes to our tally.
             let agg = CachedAgg {
+                own_mtime,
                 size: subtotal,
                 recursive_mtime: Some(max_mtime),
             };
             if let Ok(mut cache) = CACHE.lock() {
-                cache.insert((dir.clone(), own_mtime), agg);
+                cache.insert(dir.clone(), agg);
             }
             on_progress(&dir, SizeState::Known(subtotal), agg.recursive_mtime);
         }
