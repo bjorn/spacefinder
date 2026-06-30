@@ -202,6 +202,33 @@ where
     }
 }
 
+/// Mark cache entries for every ancestor of `path` (not `path` itself)
+/// as stale. Used by `walk_and_aggregate`'s cache-write-time check when
+/// a freshly walked dir's size differs from the prior cached size: the
+/// dir itself has just been updated with the correct value, but the
+/// ancestor totals built on the old value need to re-walk.
+fn mark_ancestors_stale(path: &Path) {
+    let mut targets: FxHashSet<PathBuf> = FxHashSet::default();
+    let mut cur = path.parent().map(|p| p.to_path_buf());
+    while let Some(x) = cur {
+        if let Ok(c) = std::fs::canonicalize(&x) {
+            targets.insert(c);
+        }
+        targets.insert(x.clone());
+        cur = x.parent().map(|p| p.to_path_buf());
+    }
+    if targets.is_empty() {
+        return;
+    }
+    if let Ok(mut cache) = CACHE.lock() {
+        for path in &targets {
+            if let Some(entry) = cache.get_mut(path) {
+                entry.recursive_mtime = None;
+            }
+        }
+    }
+}
+
 /// Perform the full walk for `root`, populate the cache, and emit
 /// `on_progress` for every directory encountered.
 fn walk_and_aggregate(root: &Path, pool: Arc<ThreadPool>, on_progress: &ProgressFn) {
@@ -357,8 +384,17 @@ fn walk_and_aggregate(root: &Path, pool: Arc<ThreadPool>, on_progress: &Progress
                 size: subtotal,
                 recursive_mtime: Some(max_mtime),
             };
-            if let Ok(mut cache) = CACHE.lock() {
-                cache.insert(dir.clone(), agg);
+            let prior_size = match CACHE.lock() {
+                Ok(mut cache) => cache.insert(dir.clone(), agg).map(|p| p.size),
+                Err(_) => None,
+            };
+            if let Some(prev) = prior_size {
+                if prev != subtotal {
+                    // The dir's size moved since we last walked it. Any
+                    // ancestor total that included the old value is now
+                    // stale; flag them so the next visit re-walks.
+                    mark_ancestors_stale(&dir);
+                }
             }
             on_progress(&dir, SizeState::Known(subtotal), agg.recursive_mtime);
         }
