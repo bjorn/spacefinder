@@ -1341,14 +1341,14 @@ impl App {
         } else {
             sources
         };
-        for src in sources {
+        for src in &sources {
             let Some(fname) = src.file_name() else {
                 continue;
             };
             let target = unique_name(&dest, fname.to_string_lossy().as_ref());
             let r = match op {
-                ClipOp::Copy => copy_recursive(&src, &target),
-                ClipOp::Cut => std::fs::rename(&src, &target),
+                ClipOp::Copy => copy_recursive(src, &target),
+                ClipOp::Cut => std::fs::rename(src, &target),
             };
             if let Err(e) = r {
                 log::warn!("paste {:?} → {:?} failed: {}", src, target, e);
@@ -1358,6 +1358,12 @@ impl App {
             self.cut_paths.clear();
             self.clipboard_op = None;
         }
+        // For Copy paste only the dest side gained content; for Cut paste
+        // the sources' parents shrank too. Invalidate ancestors of every
+        // involved path so their cached totals are dropped.
+        let mut affected = sources;
+        affected.push(dest);
+        dir_size::invalidate_ancestors_of_paths(&affected);
         self.refresh();
     }
 
@@ -1495,6 +1501,7 @@ impl App {
                         log::warn!("trash {:?}: {}", p, e);
                     }
                 }
+                dir_size::invalidate_ancestors_of_paths(&paths);
                 self.refresh();
             }
             Some(ConfirmAction::PermanentDelete(paths)) => {
@@ -1508,6 +1515,7 @@ impl App {
                         log::warn!("delete {:?}: {}", p, e);
                     }
                 }
+                dir_size::invalidate_ancestors_of_paths(&paths);
                 self.refresh();
             }
             None => {}
@@ -1619,6 +1627,9 @@ impl App {
             return true;
         }
         if t == slint::SharedString::from(slint::platform::Key::F5).as_str() {
+            // User-requested refresh: drop ancestor cache entries too, so
+            // any external change that shifted sizes propagates up.
+            dir_size::invalidate_ancestors_of_paths([&self.current]);
             self.refresh();
             return true;
         }
@@ -2524,7 +2535,10 @@ fn wire_callbacks(ui: &MainWindow, app: Rc<RefCell<App>>) {
                 "delete" => a.ctx_permanent_delete(),
                 "new-folder" => a.open_new_folder_dialog(),
                 "toggle-hidden" => a.toggle_hidden(),
-                "refresh" => a.refresh(),
+                "refresh" => {
+                    dir_size::invalidate_ancestors_of_paths([&a.current]);
+                    a.refresh();
+                }
                 _ => {}
             }
         });
