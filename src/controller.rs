@@ -374,7 +374,14 @@ impl App {
             if !entry.is_dir {
                 continue;
             }
-            if let Some((size, rec_mtime)) = dir_size::lookup_cached_total(&entry.path) {
+            // Prefer a fresh cached value. If the cache entry is stale
+            // (marked by our invalidation code, or mtime moved), fall back
+            // to the last-known size so the row still shows something
+            // reasonable; `spawn_size_jobs` below will re-walk it and the
+            // callback replaces the placeholder with the fresh number.
+            let cached = dir_size::lookup_cached_total(&entry.path)
+                .or_else(|| dir_size::lookup_last_known_total(&entry.path));
+            if let Some((size, rec_mtime)) = cached {
                 entry.size_state = SizeState::Known(size);
                 if let Some(t) = rec_mtime {
                     entry.modified = t;
@@ -670,10 +677,14 @@ impl App {
             if !entry.is_dir {
                 continue;
             }
-            // Already settled by the synchronous cache backfill in
-            // `refresh()`; re-running the engine would just round-trip
-            // the same value through the event loop.
-            if matches!(entry.size_state, SizeState::Known(_)) {
+            // Skip only when the cache actually has a fresh entry: the
+            // backfill in `refresh()` will already have placed that value
+            // on the row and re-running the engine would just round-trip
+            // it through the event loop. A stale-flagged entry (whose
+            // backfill also produced a Known state, but from a
+            // `recursive_mtime = None` line) needs the walk to run so the
+            // placeholder can be replaced with a fresh number.
+            if dir_size::lookup_cached_size(&entry.path).is_some() {
                 continue;
             }
             let dir = entry.path.clone();
@@ -1341,14 +1352,14 @@ impl App {
         } else {
             sources
         };
-        for src in sources {
+        for src in &sources {
             let Some(fname) = src.file_name() else {
                 continue;
             };
             let target = unique_name(&dest, fname.to_string_lossy().as_ref());
             let r = match op {
-                ClipOp::Copy => copy_recursive(&src, &target),
-                ClipOp::Cut => std::fs::rename(&src, &target),
+                ClipOp::Copy => copy_recursive(src, &target),
+                ClipOp::Cut => std::fs::rename(src, &target),
             };
             if let Err(e) = r {
                 log::warn!("paste {:?} → {:?} failed: {}", src, target, e);
@@ -1358,6 +1369,12 @@ impl App {
             self.cut_paths.clear();
             self.clipboard_op = None;
         }
+        // For Copy paste only the dest side gained content; for Cut paste
+        // the sources' parents shrank too. Invalidate ancestors of every
+        // involved path so their cached totals are dropped.
+        let mut affected = sources;
+        affected.push(dest);
+        dir_size::invalidate_ancestors_of_paths(&affected);
         self.refresh();
     }
 
@@ -1495,6 +1512,17 @@ impl App {
                         log::warn!("trash {:?}: {}", p, e);
                     }
                 }
+                dir_size::invalidate_ancestors_of_paths(&paths);
+                // Kick a walk of the trash files dir. Its size moved when
+                // the file landed there, but its parents (~/.local/share,
+                // ~/.local, ~) did not bump mtime, so their cached totals
+                // would still hit and serve a pre-trash value. The walk's
+                // cache-write-time check propagates the staleness up that
+                // chain without us having to compute it.
+                if let Some(trash_files) = dirs::data_dir().map(|d| d.join("Trash/files")) {
+                    let noop: dir_size::ProgressFn = Box::new(|_, _, _| {});
+                    self.size_engine.compute(trash_files, self.generation, noop);
+                }
                 self.refresh();
             }
             Some(ConfirmAction::PermanentDelete(paths)) => {
@@ -1508,6 +1536,7 @@ impl App {
                         log::warn!("delete {:?}: {}", p, e);
                     }
                 }
+                dir_size::invalidate_ancestors_of_paths(&paths);
                 self.refresh();
             }
             None => {}
@@ -1619,6 +1648,9 @@ impl App {
             return true;
         }
         if t == slint::SharedString::from(slint::platform::Key::F5).as_str() {
+            // User-requested refresh: drop ancestor cache entries too, so
+            // any external change that shifted sizes propagates up.
+            dir_size::invalidate_ancestors_of_paths([&self.current]);
             self.refresh();
             return true;
         }
@@ -2524,7 +2556,10 @@ fn wire_callbacks(ui: &MainWindow, app: Rc<RefCell<App>>) {
                 "delete" => a.ctx_permanent_delete(),
                 "new-folder" => a.open_new_folder_dialog(),
                 "toggle-hidden" => a.toggle_hidden(),
-                "refresh" => a.refresh(),
+                "refresh" => {
+                    dir_size::invalidate_ancestors_of_paths([&a.current]);
+                    a.refresh();
+                }
                 _ => {}
             }
         });
