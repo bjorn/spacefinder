@@ -207,25 +207,14 @@ where
 /// a freshly walked dir's size differs from the prior cached size: the
 /// dir itself has just been updated with the correct value, but the
 /// ancestor totals built on the old value need to re-walk.
+///
+/// Delegates to [`invalidate_ancestors_of_paths`] on `path.parent()`:
+/// that function walks upward starting from each path it is given, so
+/// starting from the parent yields exactly the "ancestors of `path`"
+/// set with no code duplication.
 fn mark_ancestors_stale(path: &Path) {
-    let mut targets: FxHashSet<PathBuf> = FxHashSet::default();
-    let mut cur = path.parent().map(|p| p.to_path_buf());
-    while let Some(x) = cur {
-        if let Ok(c) = std::fs::canonicalize(&x) {
-            targets.insert(c);
-        }
-        targets.insert(x.clone());
-        cur = x.parent().map(|p| p.to_path_buf());
-    }
-    if targets.is_empty() {
-        return;
-    }
-    if let Ok(mut cache) = CACHE.lock() {
-        for path in &targets {
-            if let Some(entry) = cache.get_mut(path) {
-                entry.recursive_mtime = None;
-            }
-        }
+    if let Some(parent) = path.parent() {
+        invalidate_ancestors_of_paths(std::iter::once(parent));
     }
 }
 
