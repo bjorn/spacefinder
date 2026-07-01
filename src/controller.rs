@@ -374,7 +374,14 @@ impl App {
             if !entry.is_dir {
                 continue;
             }
-            if let Some((size, rec_mtime)) = dir_size::lookup_cached_total(&entry.path) {
+            // Prefer a fresh cached value. If the cache entry is stale
+            // (marked by our invalidation code, or mtime moved), fall back
+            // to the last-known size so the row still shows something
+            // reasonable; `spawn_size_jobs` below will re-walk it and the
+            // callback replaces the placeholder with the fresh number.
+            let cached = dir_size::lookup_cached_total(&entry.path)
+                .or_else(|| dir_size::lookup_last_known_total(&entry.path));
+            if let Some((size, rec_mtime)) = cached {
                 entry.size_state = SizeState::Known(size);
                 if let Some(t) = rec_mtime {
                     entry.modified = t;
@@ -670,10 +677,14 @@ impl App {
             if !entry.is_dir {
                 continue;
             }
-            // Already settled by the synchronous cache backfill in
-            // `refresh()`; re-running the engine would just round-trip
-            // the same value through the event loop.
-            if matches!(entry.size_state, SizeState::Known(_)) {
+            // Skip only when the cache actually has a fresh entry: the
+            // backfill in `refresh()` will already have placed that value
+            // on the row and re-running the engine would just round-trip
+            // it through the event loop. A stale-flagged entry (whose
+            // backfill also produced a Known state, but from a
+            // `recursive_mtime = None` line) needs the walk to run so the
+            // placeholder can be replaced with a fresh number.
+            if dir_size::lookup_cached_size(&entry.path).is_some() {
                 continue;
             }
             let dir = entry.path.clone();

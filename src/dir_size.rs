@@ -167,6 +167,18 @@ pub fn lookup_cached_total(dir: &Path) -> Option<(u64, Option<SystemTime>)> {
     lookup_cached(dir).map(|(_, agg)| (agg.size, agg.recursive_mtime))
 }
 
+/// Return the last-known cached total for `dir`, even if the entry has
+/// been marked stale (`recursive_mtime == None`) or its `own_mtime` no
+/// longer matches. Callers use this as a display placeholder while the
+/// async walk settles the fresh value, so an invalidated ancestor still
+/// shows something meaningful instead of a "pending" flash.
+pub fn lookup_last_known_total(dir: &Path) -> Option<(u64, Option<SystemTime>)> {
+    let canon = std::fs::canonicalize(dir).ok()?;
+    let cache = CACHE.lock().ok()?;
+    let agg = cache.get(&canon).copied()?;
+    Some((agg.size, agg.recursive_mtime))
+}
+
 /// Mark cache entries for every path in `paths` and for all of their
 /// ancestor directories as stale. Call after a filesystem mutation under
 /// those paths so ancestors stop serving their pre-mutation total. A
