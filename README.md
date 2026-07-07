@@ -8,6 +8,8 @@ This is not a general-purpose file manager. Nautilus and its peers already
 do that job well. Space is optimized for one question: **what should I
 delete to free up disk?**
 
+![Treemap view of a cluttered folder, with tiles sized by disk usage and colored by file type](docs/screenshot.png)
+
 ## Features so far
 
 - **Recursive directory sizes.** A parallel `jwalk` walker fills a shared
