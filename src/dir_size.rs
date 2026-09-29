@@ -682,6 +682,275 @@ mod tests {
         let _ = std::fs::remove_dir_all(&root);
     }
 
+    /// Force a directory's mtime to a distinct value. Child add/remove bumps
+    /// it naturally, but on filesystems with coarse timestamp granularity
+    /// the natural value can collide with the one stored during the walk;
+    /// setting it explicitly removes that flake source.
+    fn touch_dir_mtime(dir: &Path) {
+        std::fs::File::open(dir)
+            .unwrap()
+            .set_modified(SystemTime::now() + std::time::Duration::from_secs(2))
+            .unwrap();
+    }
+
+    /// A direct-child add bumps the dir's own mtime, which is the validity
+    /// stamp stored inside each cache entry. The next lookup must miss
+    /// (forcing a re-walk), the last-known probe must still serve the prior
+    /// total as a display placeholder, and the re-walk must land the grown
+    /// total.
+    #[test]
+    fn mtime_bump_misses_lookup_and_rewalk_updates() {
+        let (root, expected) = make_fixture();
+        let engine = SizeEngine::new();
+        assert_eq!(run_once(&engine, &root, 1).root_total, Some(expected));
+
+        let new_file = root.join("d.bin");
+        std::fs::write(&new_file, vec![0u8; 3000]).unwrap();
+        let new_bytes = on_disk_bytes(&std::fs::metadata(&new_file).unwrap());
+        touch_dir_mtime(&root);
+
+        assert!(
+            lookup_cached_total(&root).is_none(),
+            "moved own_mtime must invalidate the cache entry"
+        );
+        assert_eq!(
+            lookup_last_known_total(&root).map(|(s, _)| s),
+            Some(expected),
+            "placeholder must still serve the pre-change total"
+        );
+
+        let run = run_once(&engine, &root, 2);
+        assert_eq!(run.root_total, Some(expected + new_bytes));
+        assert!(
+            run.dirs_seen > 1,
+            "an mtime-invalidated dir must re-walk, not short-circuit"
+        );
+
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    /// `invalidate_ancestors_of_paths` is also called with `self.current`
+    /// from the F5/"Refresh" paths, which rely on the *passed path itself*
+    /// being staled, not only its ancestors.
+    #[test]
+    fn invalidate_marks_the_passed_path_itself_stale() {
+        let (root, expected) = make_fixture();
+        let engine = SizeEngine::new();
+        assert_eq!(run_once(&engine, &root, 1).root_total, Some(expected));
+        assert!(lookup_cached_total(&root).is_some());
+
+        invalidate_ancestors_of_paths([&root]);
+        assert!(
+            lookup_cached_total(&root).is_none(),
+            "F5 on the current dir must force a re-walk of that dir"
+        );
+
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    /// Deleting a file deep in a walked tree bumps only its immediate
+    /// parent's mtime; untouched ancestors keep fresh-looking entries and
+    /// would serve the pre-delete total forever. After the mutation paths
+    /// call `invalidate_ancestors_of_paths` with the deleted path, the
+    /// whole ancestor chain must be stale (fresh probe misses, last-known
+    /// probe preserves the old total), and the next visit's re-walk must
+    /// settle the corrected size and restore freshness.
+    #[test]
+    fn invalidate_of_deleted_descendant_stales_chain_and_rewalk_fixes() {
+        let (root, expected) = make_fixture();
+        let engine = SizeEngine::new();
+        assert_eq!(run_once(&engine, &root, 1).root_total, Some(expected));
+
+        let victim = root.join("sub/inner/c.bin");
+        let victim_bytes = on_disk_bytes(&std::fs::metadata(&victim).unwrap());
+        std::fs::remove_file(&victim).unwrap();
+
+        // Precondition, and the reason explicit invalidation exists at all:
+        // root's own mtime never moved (only `inner`'s did), so without the
+        // invalidation step the cache happily serves the stale total.
+        assert_eq!(
+            lookup_cached_total(&root).map(|(s, _)| s),
+            Some(expected),
+            "untouched ancestor mtime means the cache would still hit"
+        );
+
+        // The deleted path no longer exists on disk, so canonicalize fails
+        // for it, but every ancestor it had must be marked stale.
+        invalidate_ancestors_of_paths([&victim]);
+        for dir in [root.join("sub/inner"), root.join("sub"), root.clone()] {
+            assert!(
+                lookup_cached_total(&dir).is_none(),
+                "{} must be stale after invalidate",
+                dir.display()
+            );
+        }
+        assert_eq!(
+            lookup_last_known_total(&root).map(|(s, _)| s),
+            Some(expected),
+            "stale entry must keep its last-known size as placeholder"
+        );
+
+        let run = run_once(&engine, &root, 2);
+        assert_eq!(run.root_total, Some(expected - victim_bytes));
+        for dir in [root.join("sub/inner"), root.join("sub"), root.clone()] {
+            assert!(
+                lookup_cached_total(&dir).is_some(),
+                "{} must be fresh again after the re-walk",
+                dir.display()
+            );
+        }
+
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    /// The propagation path: when a background walk discovers that a dir's
+    /// size differs from its prior cached value, every ancestor of that dir
+    /// must be marked stale so their totals re-walk on the next visit. This
+    /// is what lets "walk the trash files dir after trash::delete" propagate
+    /// up to ~/.local/share without computing the parents by hand.
+    #[test]
+    fn walk_size_change_marks_ancestors_stale() {
+        let (root, expected) = make_fixture();
+        let engine = SizeEngine::new();
+        assert_eq!(run_once(&engine, &root, 1).root_total, Some(expected));
+
+        // An external mutation shrinks `inner`; nobody called invalidate,
+        // so `sub` and `root` still look fresh to the cache.
+        let victim = root.join("sub/inner/c.bin");
+        let victim_bytes = on_disk_bytes(&std::fs::metadata(&victim).unwrap());
+        std::fs::remove_file(&victim).unwrap();
+        let inner = root.join("sub/inner");
+        touch_dir_mtime(&inner);
+
+        // Walking the changed dir (analogue of the trash-dir walk) must
+        // stale its ancestors: their totals embed the pre-delete size.
+        assert_eq!(run_once(&engine, &inner, 2).root_total, Some(0));
+        assert!(lookup_cached_total(&inner).is_some());
+        for dir in [root.join("sub"), root.clone()] {
+            assert!(
+                lookup_cached_total(&dir).is_none(),
+                "{} must be staled by the walk's size-change check",
+                dir.display()
+            );
+        }
+        assert_eq!(
+            lookup_last_known_total(&root).map(|(s, _)| s),
+            Some(expected),
+            "propagated staleness must keep the old total as placeholder"
+        );
+
+        let run = run_once(&engine, &root, 3);
+        assert_eq!(run.root_total, Some(expected - victim_bytes));
+        assert!(lookup_cached_total(&root).is_some());
+
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    /// The mirror of the propagation test: a stale-flagged dir that re-walks
+    /// to the *same* size must not mark its ancestors. Their cached totals
+    /// embedded the old value and that value is still right; re-staling
+    /// them would force pointless re-walks all the way up the chain.
+    ///
+    /// `invalidate_ancestors_of_paths` always stales the full chain, so the
+    /// "dir stale, ancestors fresh" state can't be produced through the
+    /// public API; flip the flag on the cache entry directly.
+    #[test]
+    fn unchanged_rewalk_does_not_stale_ancestors() {
+        let (root, expected) = make_fixture();
+        let engine = SizeEngine::new();
+        assert_eq!(run_once(&engine, &root, 1).root_total, Some(expected));
+
+        let inner = std::fs::canonicalize(root.join("sub/inner")).unwrap();
+        let inner_size = on_disk_bytes(&std::fs::metadata(root.join("sub/inner/c.bin")).unwrap());
+        {
+            let mut cache = CACHE.lock().unwrap();
+            cache.get_mut(&inner).unwrap().recursive_mtime = None;
+        }
+        assert!(lookup_cached_total(&inner).is_none());
+
+        let run = run_once(&engine, &inner, 2);
+        assert_eq!(run.root_total, Some(inner_size));
+
+        // The re-walked dir is fresh again...
+        assert!(lookup_cached_total(&inner).is_some());
+        // ...and nothing upstream got staled by a no-change comparison.
+        assert!(
+            lookup_cached_total(&root.join("sub")).is_some(),
+            "unchanged size must not propagate staleness to sub"
+        );
+        assert!(
+            lookup_cached_total(&root).is_some(),
+            "unchanged size must not propagate staleness to root"
+        );
+
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    /// Growing a file's *contents* changes no directory mtime, so the cache
+    /// keeps serving the old total: a documented blind spot of the mtime
+    /// validity stamp. The explicit-invalidation escape hatch (F5, or a
+    /// mutation call site) must still route around it.
+    #[test]
+    fn content_change_served_stale_until_invalidate() {
+        let (root, expected) = make_fixture();
+        let engine = SizeEngine::new();
+        assert_eq!(run_once(&engine, &root, 1).root_total, Some(expected));
+
+        let victim = root.join("sub/inner/c.bin");
+        let old_bytes = on_disk_bytes(&std::fs::metadata(&victim).unwrap());
+        use std::io::Write;
+        let mut f = std::fs::OpenOptions::new()
+            .append(true)
+            .open(&victim)
+            .unwrap();
+        f.write_all(&vec![0u8; 9000]).unwrap();
+        drop(f);
+        let new_bytes = on_disk_bytes(&std::fs::metadata(&victim).unwrap());
+        assert!(new_bytes > old_bytes, "test setup: file must have grown");
+
+        // The blind spot: no dir mtime in the chain moved, so the stale
+        // total still hits.
+        assert_eq!(
+            lookup_cached_total(&root).map(|(s, _)| s),
+            Some(expected),
+            "content-only change is invisible to the mtime check"
+        );
+
+        invalidate_ancestors_of_paths([&victim]);
+        assert!(lookup_cached_total(&root).is_none());
+        assert_eq!(
+            run_once(&engine, &root, 2).root_total,
+            Some(expected + (new_bytes - old_bytes))
+        );
+
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    /// Neither probe must fabricate a size for a dir that was never walked:
+    /// the row stays in Calculating until the walk lands rather than
+    /// showing a bogus value. Invalidating a path with no cache entries
+    /// must be a no-op rather than a panic.
+    #[test]
+    fn probes_return_none_for_never_cached_dir() {
+        let nanos = SystemTime::now()
+            .duration_since(SystemTime::UNIX_EPOCH)
+            .map(|d| d.as_nanos())
+            .unwrap_or(0);
+        let root = std::env::temp_dir().join(format!(
+            "space-dir-size-probe-{}-{}",
+            std::process::id(),
+            nanos
+        ));
+        std::fs::create_dir_all(&root).unwrap();
+
+        assert!(lookup_cached_size(&root).is_none());
+        assert!(lookup_cached_total(&root).is_none());
+        assert!(lookup_last_known_total(&root).is_none());
+        invalidate_ancestors_of_paths([root.join("never-existed.bin"), root.clone()]);
+
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
     /// Ad-hoc probe against a real path:
     /// `SPACE_PROBE=/some/dir cargo test --release -- --nocapture --ignored size_probe`
     #[test]
