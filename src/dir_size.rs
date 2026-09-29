@@ -682,15 +682,12 @@ mod tests {
         let _ = std::fs::remove_dir_all(&root);
     }
 
-    /// Force a directory's mtime to a distinct value. Child add/remove bumps
-    /// it naturally, but on filesystems with coarse timestamp granularity
-    /// the natural value can collide with the one stored during the walk;
-    /// setting it explicitly removes that flake source.
-    fn touch_dir_mtime(dir: &Path) {
-        std::fs::File::open(dir)
-            .unwrap()
-            .set_modified(SystemTime::now() + std::time::Duration::from_secs(2))
-            .unwrap();
+    /// Pause so a directory mtime bump becomes distinguishable from the
+    /// value stored during the walk even on filesystems with coarse
+    /// (one-second) timestamp granularity. Same convention as
+    /// `recursive_mtime_reflects_deepest_change`.
+    fn wait_for_mtime_granularity() {
+        std::thread::sleep(std::time::Duration::from_millis(1100));
     }
 
     /// A direct-child add bumps the dir's own mtime, which is the validity
@@ -704,10 +701,10 @@ mod tests {
         let engine = SizeEngine::new();
         assert_eq!(run_once(&engine, &root, 1).root_total, Some(expected));
 
+        wait_for_mtime_granularity();
         let new_file = root.join("d.bin");
         std::fs::write(&new_file, vec![0u8; 3000]).unwrap();
         let new_bytes = on_disk_bytes(&std::fs::metadata(&new_file).unwrap());
-        touch_dir_mtime(&root);
 
         assert!(
             lookup_cached_total(&root).is_none(),
@@ -818,9 +815,9 @@ mod tests {
         // so `sub` and `root` still look fresh to the cache.
         let victim = root.join("sub/inner/c.bin");
         let victim_bytes = on_disk_bytes(&std::fs::metadata(&victim).unwrap());
+        wait_for_mtime_granularity();
         std::fs::remove_file(&victim).unwrap();
         let inner = root.join("sub/inner");
-        touch_dir_mtime(&inner);
 
         // Walking the changed dir (analogue of the trash-dir walk) must
         // stale its ancestors: their totals embed the pre-delete size.
