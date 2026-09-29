@@ -306,7 +306,12 @@ fn walk_and_aggregate(root: &Path, pool: Arc<ThreadPool>, on_progress: &Progress
                             .push(path.clone());
                     }
                     // Did we fail to read its children?
-                    if entry.read_children_error.is_some() {
+                    if entry
+                        .read_children
+                        .as_ref()
+                        .and_then(|rc| rc.error())
+                        .is_some()
+                    {
                         dir_errors.insert(path, ());
                     }
                 } else if entry.file_type.is_file() {
