@@ -9,9 +9,25 @@ env:
   CARGO_TERM_COLOR: always
 
 jobs:
+  # The tag must match the crate version in Cargo.toml; otherwise the
+  # packages and crates.io publish would carry the wrong version.
+  check:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+      - name: Verify tag matches crate version
+        run: |
+          tag="${GITHUB_REF_NAME#v}"
+          ver=$(cargo metadata --no-deps --format-version 1 | jq -r '.packages[0].version')
+          if [ "$tag" != "$ver" ]; then
+            echo "tag $tag does not match Cargo.toml version $ver"
+            exit 1
+          fi
+
   # Build the Linux bundles (AppImage + .deb) for the tag and attach them
   # to the GitHub Release.
   binaries:
+    needs: check
     runs-on: ubuntu-latest
     permissions:
       contents: write
@@ -47,10 +63,13 @@ jobs:
             target/release/*.AppImage
             target/release/*.deb
           generate_release_notes: true
+          # Semver prerelease tags (v0.2.0-beta.1) must not become "Latest".
+          prerelease: ${{ contains(github.ref_name, '-') }}
 
   # Build the Windows installer (NSIS setup.exe) and attach it to the same
   # GitHub Release for the tag.
   binaries-windows:
+    needs: check
     runs-on: windows-latest
     permissions:
       contents: write
@@ -70,6 +89,8 @@ jobs:
         with:
           files: target/release/*-setup.exe
           generate_release_notes: true
+          # Semver prerelease tags (v0.2.0-beta.1) must not become "Latest".
+          prerelease: ${{ contains(github.ref_name, '-') }}
 
   # Publish to crates.io using Trusted Publishing (OIDC, no stored token).
   # One-time setup required on crates.io: add a Trusted Publisher for this
@@ -77,6 +98,7 @@ jobs:
   # that is configured (and for the very first publish, which reserves the
   # name), publish manually with `cargo publish`.
   crate:
+    needs: check
     runs-on: ubuntu-latest
     # Gate crate publishing behind the "release" environment. Configure it
     # under Settings > Environments with required reviewers so each publish
