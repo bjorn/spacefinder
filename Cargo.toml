@@ -33,6 +33,8 @@ clap = { version = "4.6.1", features = ["derive"] }
 freedesktop-icons = "0.4"
 xdg-mime = "0.4"
 arboard = { version = "3", default-features = false, features = ["wayland-data-control"] }
+
+[target.'cfg(unix)'.dependencies]
 libc = "0.2"
 
 [target.'cfg(not(target_os = "linux"))'.dependencies]
