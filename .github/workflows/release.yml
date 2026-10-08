@@ -92,6 +92,75 @@ jobs:
           # Semver prerelease tags (v0.2.0-beta.1) must not become "Latest".
           prerelease: ${{ contains(github.ref_name, '-') }}
 
+  # Build the macOS bundle (a universal .app plus .dmg covering both
+  # Apple Silicon and Intel) and attach it to the same GitHub Release
+  # for the tag. cargo-packager signs the .app inside-out with the
+  # Developer ID named in Cargo.toml, importing the certificate from
+  # APPLE_CERTIFICATE/APPLE_CERTIFICATE_PASSWORD secrets, and notarizes
+  # when APPLE_ID/APPLE_PASSWORD/APPLE_TEAM_ID (or the APPLE_API_*
+  # equivalents) are set; without notarization credentials it signs but
+  # skips notarization with a warning.
+  binaries-macos:
+    needs: check
+    runs-on: macos-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v6
+      - uses: Swatinem/rust-cache@v2
+      - name: Install targets
+        run: |
+          rustup target add x86_64-apple-darwin
+          rustup target add aarch64-apple-darwin
+      - name: Build Intel binary
+        run: cargo build --verbose --release --target x86_64-apple-darwin
+      - name: Build ARM64 binary
+        run: cargo build --verbose --release --target aarch64-apple-darwin
+      - name: Test
+        run: cargo test --release
+      - name: Create universal binary
+        run: |
+          lipo -create \
+            target/x86_64-apple-darwin/release/spacefinder \
+            target/aarch64-apple-darwin/release/spacefinder \
+            -output target/release/spacefinder
+      - name: Install cargo-packager
+        run: cargo install cargo-packager --locked
+      # Secrets unset on the repo interpolate to empty strings, which
+      # cargo-packager would mistake for configured credentials; drop the
+      # empty ones so absent notarization vars skip notarization cleanly.
+      - name: Package
+        env:
+          APPLE_CERTIFICATE: ${{ secrets.APPLE_CERTIFICATE }}
+          APPLE_CERTIFICATE_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
+          APPLE_ID: ${{ secrets.APPLE_ID }}
+          APPLE_PASSWORD: ${{ secrets.APPLE_PASSWORD }}
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+          APPLE_API_KEY: ${{ secrets.APPLE_API_KEY }}
+          APPLE_API_ISSUER: ${{ secrets.APPLE_API_ISSUER }}
+          APPLE_API_KEY_PATH: ${{ secrets.APPLE_API_KEY_PATH }}
+        run: |
+          for var in APPLE_CERTIFICATE APPLE_CERTIFICATE_PASSWORD \
+                     APPLE_ID APPLE_PASSWORD APPLE_TEAM_ID \
+                     APPLE_API_KEY APPLE_API_ISSUER APPLE_API_KEY_PATH; do
+            if [ -z "${!var}" ]; then
+              unset "$var"
+            fi
+          done
+          cargo packager --release
+      - name: Rename dmg for universal binary
+        run: |
+          for dmg in target/release/*.dmg; do
+            mv "$dmg" "${dmg%_*.dmg}_universal.dmg"
+          done
+      - name: Publish GitHub release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: target/release/*.dmg
+          generate_release_notes: true
+          # Semver prerelease tags (v0.2.0-beta.1) must not become "Latest".
+          prerelease: ${{ contains(github.ref_name, '-') }}
+
   # Publish to crates.io using Trusted Publishing (OIDC, no stored token).
   # One-time setup required on crates.io: add a Trusted Publisher for this
   # crate pointing at repo bjorn/spacefinder, workflow release.yml. Until

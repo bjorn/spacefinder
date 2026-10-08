@@ -69,3 +69,9 @@ icons = [
     "assets/spacefinder-512.png",
     "assets/spacefinder.ico",
 ]
+
+[package.metadata.packager.macos]
+# SHA-1 fingerprint of the Developer ID Application certificate, used
+# instead of the name because multiple certificates share the identity
+# string and codesign refuses ambiguous matches.
+signing-identity = "8372505B44B74B5E7AEC2A41B692A6C2B417B702"
