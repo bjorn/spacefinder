@@ -57,11 +57,14 @@ jobs:
         env:
           NO_STRIP: "true"
       - name: Publish GitHub release
-        uses: softprops/action-gh-release@v2
+        uses: softprops/action-gh-release@v3
         with:
           files: |
             target/release/*.AppImage
             target/release/*.deb
+          # Only this job generates notes: each gh-release call appends the
+          # generated notes to the existing body, so enabling it in every
+          # job would duplicate them.
           generate_release_notes: true
           # Semver prerelease tags (v0.2.0-beta.1) must not become "Latest".
           prerelease: ${{ contains(github.ref_name, '-') }}
@@ -85,10 +88,9 @@ jobs:
       - name: Package
         run: cargo packager --release
       - name: Publish GitHub release
-        uses: softprops/action-gh-release@v2
+        uses: softprops/action-gh-release@v3
         with:
           files: target/release/*-setup.exe
-          generate_release_notes: true
           # Semver prerelease tags (v0.2.0-beta.1) must not become "Latest".
           prerelease: ${{ contains(github.ref_name, '-') }}
 
@@ -178,10 +180,9 @@ jobs:
             spctl --assess --type open --context context:primary-signature --verbose=2 "$dmg"
           done
       - name: Publish GitHub release
-        uses: softprops/action-gh-release@v2
+        uses: softprops/action-gh-release@v3
         with:
           files: target/release/*.dmg
-          generate_release_notes: true
           # Semver prerelease tags (v0.2.0-beta.1) must not become "Latest".
           prerelease: ${{ contains(github.ref_name, '-') }}
 
