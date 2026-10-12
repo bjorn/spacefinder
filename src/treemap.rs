@@ -135,7 +135,7 @@ pub fn lay_out(inputs: &[TileInput<'_>]) -> Vec<Tile> {
     );
 
     let mut tiles = Vec::with_capacity(usable.len());
-    for (e, r) in usable.into_iter().zip(rects.into_iter()) {
+    for (e, r) in usable.into_iter().zip(rects) {
         if r.w * r.h < MIN_RENDERABLE_FRAC_AREA {
             continue;
         }
@@ -332,7 +332,7 @@ mod tests {
     /// stays inside the [0, 1] × [0, 1] unit square.
     #[test]
     fn squarify_tiles_exactly_cover_input() {
-        let sizes = vec![6.0, 6.0, 4.0, 3.0, 2.0, 2.0, 1.0];
+        let sizes = [6.0, 6.0, 4.0, 3.0, 2.0, 2.0, 1.0];
         let total: f32 = sizes.iter().sum();
         // Normalize so sum == 1.0 to match lay_out()'s contract.
         let norm: Vec<f32> = sizes.iter().map(|s| s / total).collect();

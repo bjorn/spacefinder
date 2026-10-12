@@ -138,14 +138,15 @@ mod tests {
     fn save_then_load_roundtrip() {
         let dir = TempDir::new().unwrap();
         let path = cfg_path(&dir);
-        let mut cfg = Config::default();
-        cfg.view_mode = ViewMode::Grid;
-        cfg.sort_col = SortCol::Size;
-        cfg.sort_asc = false;
-        cfg.show_hidden = true;
-        cfg.folders_first = false;
-        cfg.window_size = [1600, 900];
-        cfg.last_location = Some(PathBuf::from("/tmp/example"));
+        let cfg = Config {
+            view_mode: ViewMode::Grid,
+            sort_col: SortCol::Size,
+            sort_asc: false,
+            show_hidden: true,
+            folders_first: false,
+            window_size: [1600, 900],
+            last_location: Some(PathBuf::from("/tmp/example")),
+        };
         save_to(&path, &cfg);
         let loaded = load_from(&path);
         assert_eq!(loaded, cfg);
@@ -168,8 +169,10 @@ mod tests {
         fs::create_dir_all(path.parent().unwrap()).unwrap();
         fs::write(&path, br#"{"view_mode":"Grid"}"#).unwrap();
         let cfg = load_from(&path);
-        let mut expected = Config::default();
-        expected.view_mode = ViewMode::Grid;
+        let expected = Config {
+            view_mode: ViewMode::Grid,
+            ..Default::default()
+        };
         assert_eq!(cfg, expected);
     }
 

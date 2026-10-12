@@ -394,13 +394,13 @@ fn walk_and_aggregate(root: &Path, pool: Arc<ThreadPool>, on_progress: &Progress
                 Ok(mut cache) => cache.insert(dir.clone(), agg).map(|p| p.size),
                 Err(_) => None,
             };
-            if let Some(prev) = prior_size {
-                if prev != subtotal {
-                    // The dir's size moved since we last walked it. Any
-                    // ancestor total that included the old value is now
-                    // stale; flag them so the next visit re-walks.
-                    mark_ancestors_stale(&dir);
-                }
+            if let Some(prev) = prior_size
+                && prev != subtotal
+            {
+                // The dir's size moved since we last walked it. Any
+                // ancestor total that included the old value is now
+                // stale; flag them so the next visit re-walks.
+                mark_ancestors_stale(&dir);
             }
             on_progress(&dir, SizeState::Known(subtotal), agg.recursive_mtime);
         }

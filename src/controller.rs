@@ -28,6 +28,11 @@ const PERSIST_DEBOUNCE: Duration = Duration::from_millis(500);
 /// out against them. Matches the dark theme's elevated surface tone.
 const DIR_TILE_RGB: (u8, u8, u8) = (0x6e, 0x6e, 0x78);
 
+/// A completed size result posted back from a background walk: the
+/// directory, its new state, and the recursive mtime it was computed
+/// from (used to detect staleness).
+type SizeUpdate = (PathBuf, SizeState, Option<SystemTime>);
+
 thread_local! {
     /// Handle to the running `App`, set in [`App::new`]. Background size
     /// workers post results through `slint::Weak::upgrade_in_event_loop`,
@@ -572,8 +577,7 @@ impl App {
         }
         let visible = Arc::new(visible);
 
-        let pending: Arc<Mutex<Vec<(PathBuf, SizeState, Option<SystemTime>)>>> =
-            Arc::new(Mutex::new(Vec::new()));
+        let pending: Arc<Mutex<Vec<SizeUpdate>>> = Arc::new(Mutex::new(Vec::new()));
         let has_pending = Arc::new(AtomicBool::new(false));
 
         let ui_for_cb = ui.clone();
@@ -600,7 +604,7 @@ impl App {
                     let has_pending_cb2 = has_pending_cb.clone();
                     let _ = ui_for_cb.upgrade_in_event_loop(move |_ui| {
                         has_pending_cb2.store(false, Ordering::Release);
-                        let drained: Vec<(PathBuf, SizeState, Option<SystemTime>)> = {
+                        let drained: Vec<SizeUpdate> = {
                             let mut buf = match pending_cb2.lock() {
                                 Ok(g) => g,
                                 Err(poisoned) => poisoned.into_inner(),
@@ -669,8 +673,7 @@ impl App {
 
         // Shared, batched update buffer. `has_pending` gates the posting of
         // exactly one event-loop dispatch per drain cycle.
-        let pending: Arc<Mutex<Vec<(PathBuf, SizeState, Option<SystemTime>)>>> =
-            Arc::new(Mutex::new(Vec::new()));
+        let pending: Arc<Mutex<Vec<SizeUpdate>>> = Arc::new(Mutex::new(Vec::new()));
         let has_pending = Arc::new(AtomicBool::new(false));
 
         for entry in &self.entries {
@@ -720,7 +723,7 @@ impl App {
                             // worker-side pushes that race in will post a
                             // fresh dispatch for the next frame.
                             has_pending_cb.store(false, Ordering::Release);
-                            let drained: Vec<(PathBuf, SizeState, Option<SystemTime>)> = {
+                            let drained: Vec<SizeUpdate> = {
                                 let mut buf = match pending_cb.lock() {
                                     Ok(g) => g,
                                     Err(poisoned) => poisoned.into_inner(),
@@ -752,11 +755,7 @@ impl App {
     /// Dropped silently (as a group) if the generation does not match (the
     /// user has navigated away). Individual entries that are no longer in
     /// the current listing are ignored.
-    fn apply_size_updates(
-        &mut self,
-        generation: u64,
-        updates: Vec<(PathBuf, SizeState, Option<SystemTime>)>,
-    ) {
+    fn apply_size_updates(&mut self, generation: u64, updates: Vec<SizeUpdate>) {
         if generation != self.generation {
             return;
         }
@@ -2156,183 +2155,6 @@ fn laid_tile_to_ui(c: &LaidTile, selection: &FxHashSet<usize>, filtered: &[usize
     }
 }
 
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn sort_col_round_trip() {
-        for c in [
-            config::SortCol::Name,
-            config::SortCol::Modified,
-            config::SortCol::Size,
-        ] {
-            assert_eq!(sort_col_to_config(sort_col_from_config(c)), c);
-        }
-    }
-
-    #[test]
-    fn view_mode_round_trip() {
-        for v in [
-            config::ViewMode::List,
-            config::ViewMode::Grid,
-            config::ViewMode::Columns,
-            config::ViewMode::Treemap,
-        ] {
-            assert_eq!(view_mode_to_config(view_mode_from_config(v)), v);
-        }
-        // Integer side: 0 is List, 1 is Grid, 2 is Columns, 3 is
-        // Treemap; anything outside that range clamps to List. We
-        // match `ui/main.slint` where `view-mode` is an int with
-        // 0 = list, 1 = grid, 2 = columns, 3 = treemap.
-        assert_eq!(view_mode_to_config(0), config::ViewMode::List);
-        assert_eq!(view_mode_to_config(1), config::ViewMode::Grid);
-        assert_eq!(view_mode_to_config(2), config::ViewMode::Columns);
-        assert_eq!(view_mode_to_config(3), config::ViewMode::Treemap);
-        assert_eq!(view_mode_to_config(-1), config::ViewMode::List);
-        assert_eq!(view_mode_to_config(99), config::ViewMode::List);
-    }
-
-    #[test]
-    fn config_defaults_map_to_expected_runtime_values() {
-        let cfg = Config::default();
-        assert!(matches!(sort_col_from_config(cfg.sort_col), SortCol::Name));
-        assert_eq!(view_mode_from_config(cfg.view_mode), 0);
-        assert!(cfg.sort_asc);
-        assert!(!cfg.show_hidden);
-        assert!(cfg.folders_first);
-    }
-
-    /// Build a synthetic entry for sort tests. Directories get a
-    /// `size_state` argument (since that is what the sort comparator actually
-    /// inspects for dirs), files are always `Known(size)`.
-    fn make_entry(name: &str, is_dir: bool, size: u64, state: SizeState) -> Entry {
-        Entry {
-            name: name.to_string(),
-            path: PathBuf::from(name),
-            is_dir,
-            size: if is_dir { 0 } else { size },
-            size_state: if is_dir {
-                state
-            } else {
-                SizeState::Known(size)
-            },
-            modified: std::time::SystemTime::UNIX_EPOCH,
-            hidden: false,
-            category: if is_dir {
-                None
-            } else {
-                Some(FileCategory::from_path(Path::new(name)))
-            },
-        }
-    }
-
-    fn names(entries: &[Entry], order: &[usize]) -> Vec<String> {
-        order.iter().map(|&i| entries[i].name.clone()).collect()
-    }
-
-    /// Sort by Size, mixture of files and dirs with known and unknown sizes.
-    /// Even with `folders_first = true`, sorting by Size interleaves files
-    /// and directories in pure size order; the folders-first grouping is a
-    /// Name-column-only rule. Unknown sizes sink below known ones in
-    /// descending order.
-    #[test]
-    fn sort_indices_by_size_mixed_known_and_unknown() {
-        let entries = vec![
-            make_entry("zdir-unknown", true, 0, SizeState::Calculating),
-            make_entry("adir-big", true, 500, SizeState::Known(500)),
-            make_entry("bfile-small", false, 10, SizeState::Known(10)),
-            make_entry("cfile-big", false, 100, SizeState::Known(100)),
-            make_entry("adir-small", true, 50, SizeState::Known(50)),
-        ];
-        let filtered: Vec<usize> = (0..entries.len()).collect();
-
-        // Descending size, folders_first = true.
-        let out = sort_indices(&entries, &filtered, SortCol::Size, false, true);
-        let got = names(&entries, &out);
-        assert_eq!(
-            got,
-            vec![
-                "adir-big",     // 500, known, dir
-                "cfile-big",    // 100, known, file
-                "adir-small",   // 50, known, dir
-                "bfile-small",  // 10, known, file
-                "zdir-unknown", // unknown (sinks below known in desc)
-            ],
-        );
-    }
-
-    /// Folders-first grouping still applies when sorting by Name. With
-    /// `folders_first = true` and ascending Name, directories come before
-    /// files even when that conflicts with pure alphabetical order.
-    #[test]
-    fn sort_indices_by_name_groups_folders_first() {
-        let entries = vec![
-            make_entry("banana", false, 10, SizeState::Known(10)),
-            make_entry("cherry", true, 0, SizeState::Known(0)),
-            make_entry("apple", false, 20, SizeState::Known(20)),
-            make_entry("date", true, 0, SizeState::Known(0)),
-        ];
-        let filtered: Vec<usize> = (0..entries.len()).collect();
-
-        let out = sort_indices(&entries, &filtered, SortCol::Name, true, true);
-        assert_eq!(
-            names(&entries, &out),
-            vec!["cherry", "date", "apple", "banana"],
-        );
-    }
-
-    /// When sorting by Modified, files and directories interleave by the
-    /// modified timestamp regardless of `folders_first`.
-    #[test]
-    fn sort_indices_by_modified_interleaves_dirs_and_files() {
-        use std::time::{Duration, SystemTime};
-        let base = SystemTime::UNIX_EPOCH;
-        let mut mk = |name: &str, is_dir: bool, secs: u64| {
-            let mut e = make_entry(name, is_dir, 0, SizeState::Known(0));
-            e.modified = base + Duration::from_secs(secs);
-            e
-        };
-        let entries = vec![
-            mk("dir-old", true, 10),
-            mk("file-new", false, 40),
-            mk("dir-new", true, 30),
-            mk("file-old", false, 20),
-        ];
-        let filtered: Vec<usize> = (0..entries.len()).collect();
-
-        // Ascending, folders_first = true: pure chronological order.
-        let asc = sort_indices(&entries, &filtered, SortCol::Modified, true, true);
-        assert_eq!(
-            names(&entries, &asc),
-            vec!["dir-old", "file-old", "dir-new", "file-new"],
-        );
-    }
-
-    /// When two directories are both `Calculating`, they should fall back to
-    /// alphabetical order, regardless of `sort_asc`. This is the "readable
-    /// pre-settle order" the fix aims to provide.
-    #[test]
-    fn sort_indices_by_size_ties_on_unknown_are_alphabetical() {
-        let entries = vec![
-            make_entry("charlie", true, 0, SizeState::Calculating),
-            make_entry("alpha", true, 0, SizeState::Calculating),
-            make_entry("bravo", true, 0, SizeState::Calculating),
-        ];
-        let filtered: Vec<usize> = (0..entries.len()).collect();
-
-        // Ascending.
-        let asc = sort_indices(&entries, &filtered, SortCol::Size, true, true);
-        assert_eq!(names(&entries, &asc), vec!["alpha", "bravo", "charlie"]);
-
-        // Descending: alphabetical fallback applies before the reverse flip,
-        // so the on-screen order flips to z..a. This is expected and still
-        // readable.
-        let desc = sort_indices(&entries, &filtered, SortCol::Size, false, true);
-        assert_eq!(names(&entries, &desc), vec!["charlie", "bravo", "alpha"]);
-    }
-}
-
 fn unique_name(dir: &Path, name: &str) -> PathBuf {
     let base = dir.join(name);
     if !base.exists() {
@@ -2738,4 +2560,181 @@ fn main_menu(a: &App) -> Vec<MenuEntry> {
         menu_separator(),
         menu_entry(&tr("Refresh"), "refresh", "F5"),
     ]
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn sort_col_round_trip() {
+        for c in [
+            config::SortCol::Name,
+            config::SortCol::Modified,
+            config::SortCol::Size,
+        ] {
+            assert_eq!(sort_col_to_config(sort_col_from_config(c)), c);
+        }
+    }
+
+    #[test]
+    fn view_mode_round_trip() {
+        for v in [
+            config::ViewMode::List,
+            config::ViewMode::Grid,
+            config::ViewMode::Columns,
+            config::ViewMode::Treemap,
+        ] {
+            assert_eq!(view_mode_to_config(view_mode_from_config(v)), v);
+        }
+        // Integer side: 0 is List, 1 is Grid, 2 is Columns, 3 is
+        // Treemap; anything outside that range clamps to List. We
+        // match `ui/main.slint` where `view-mode` is an int with
+        // 0 = list, 1 = grid, 2 = columns, 3 = treemap.
+        assert_eq!(view_mode_to_config(0), config::ViewMode::List);
+        assert_eq!(view_mode_to_config(1), config::ViewMode::Grid);
+        assert_eq!(view_mode_to_config(2), config::ViewMode::Columns);
+        assert_eq!(view_mode_to_config(3), config::ViewMode::Treemap);
+        assert_eq!(view_mode_to_config(-1), config::ViewMode::List);
+        assert_eq!(view_mode_to_config(99), config::ViewMode::List);
+    }
+
+    #[test]
+    fn config_defaults_map_to_expected_runtime_values() {
+        let cfg = Config::default();
+        assert!(matches!(sort_col_from_config(cfg.sort_col), SortCol::Name));
+        assert_eq!(view_mode_from_config(cfg.view_mode), 0);
+        assert!(cfg.sort_asc);
+        assert!(!cfg.show_hidden);
+        assert!(cfg.folders_first);
+    }
+
+    /// Build a synthetic entry for sort tests. Directories get a
+    /// `size_state` argument (since that is what the sort comparator actually
+    /// inspects for dirs), files are always `Known(size)`.
+    fn make_entry(name: &str, is_dir: bool, size: u64, state: SizeState) -> Entry {
+        Entry {
+            name: name.to_string(),
+            path: PathBuf::from(name),
+            is_dir,
+            size: if is_dir { 0 } else { size },
+            size_state: if is_dir {
+                state
+            } else {
+                SizeState::Known(size)
+            },
+            modified: std::time::SystemTime::UNIX_EPOCH,
+            hidden: false,
+            category: if is_dir {
+                None
+            } else {
+                Some(FileCategory::from_path(Path::new(name)))
+            },
+        }
+    }
+
+    fn names(entries: &[Entry], order: &[usize]) -> Vec<String> {
+        order.iter().map(|&i| entries[i].name.clone()).collect()
+    }
+
+    /// Sort by Size, mixture of files and dirs with known and unknown sizes.
+    /// Even with `folders_first = true`, sorting by Size interleaves files
+    /// and directories in pure size order; the folders-first grouping is a
+    /// Name-column-only rule. Unknown sizes sink below known ones in
+    /// descending order.
+    #[test]
+    fn sort_indices_by_size_mixed_known_and_unknown() {
+        let entries = vec![
+            make_entry("zdir-unknown", true, 0, SizeState::Calculating),
+            make_entry("adir-big", true, 500, SizeState::Known(500)),
+            make_entry("bfile-small", false, 10, SizeState::Known(10)),
+            make_entry("cfile-big", false, 100, SizeState::Known(100)),
+            make_entry("adir-small", true, 50, SizeState::Known(50)),
+        ];
+        let filtered: Vec<usize> = (0..entries.len()).collect();
+
+        // Descending size, folders_first = true.
+        let out = sort_indices(&entries, &filtered, SortCol::Size, false, true);
+        let got = names(&entries, &out);
+        assert_eq!(
+            got,
+            vec![
+                "adir-big",     // 500, known, dir
+                "cfile-big",    // 100, known, file
+                "adir-small",   // 50, known, dir
+                "bfile-small",  // 10, known, file
+                "zdir-unknown", // unknown (sinks below known in desc)
+            ],
+        );
+    }
+
+    /// Folders-first grouping still applies when sorting by Name. With
+    /// `folders_first = true` and ascending Name, directories come before
+    /// files even when that conflicts with pure alphabetical order.
+    #[test]
+    fn sort_indices_by_name_groups_folders_first() {
+        let entries = vec![
+            make_entry("banana", false, 10, SizeState::Known(10)),
+            make_entry("cherry", true, 0, SizeState::Known(0)),
+            make_entry("apple", false, 20, SizeState::Known(20)),
+            make_entry("date", true, 0, SizeState::Known(0)),
+        ];
+        let filtered: Vec<usize> = (0..entries.len()).collect();
+
+        let out = sort_indices(&entries, &filtered, SortCol::Name, true, true);
+        assert_eq!(
+            names(&entries, &out),
+            vec!["cherry", "date", "apple", "banana"],
+        );
+    }
+
+    /// When sorting by Modified, files and directories interleave by the
+    /// modified timestamp regardless of `folders_first`.
+    #[test]
+    fn sort_indices_by_modified_interleaves_dirs_and_files() {
+        use std::time::{Duration, SystemTime};
+        let base = SystemTime::UNIX_EPOCH;
+        let mk = |name: &str, is_dir: bool, secs: u64| {
+            let mut e = make_entry(name, is_dir, 0, SizeState::Known(0));
+            e.modified = base + Duration::from_secs(secs);
+            e
+        };
+        let entries = vec![
+            mk("dir-old", true, 10),
+            mk("file-new", false, 40),
+            mk("dir-new", true, 30),
+            mk("file-old", false, 20),
+        ];
+        let filtered: Vec<usize> = (0..entries.len()).collect();
+
+        // Ascending, folders_first = true: pure chronological order.
+        let asc = sort_indices(&entries, &filtered, SortCol::Modified, true, true);
+        assert_eq!(
+            names(&entries, &asc),
+            vec!["dir-old", "file-old", "dir-new", "file-new"],
+        );
+    }
+
+    /// When two directories are both `Calculating`, they should fall back to
+    /// alphabetical order, regardless of `sort_asc`. This is the "readable
+    /// pre-settle order" the fix aims to provide.
+    #[test]
+    fn sort_indices_by_size_ties_on_unknown_are_alphabetical() {
+        let entries = vec![
+            make_entry("charlie", true, 0, SizeState::Calculating),
+            make_entry("alpha", true, 0, SizeState::Calculating),
+            make_entry("bravo", true, 0, SizeState::Calculating),
+        ];
+        let filtered: Vec<usize> = (0..entries.len()).collect();
+
+        // Ascending.
+        let asc = sort_indices(&entries, &filtered, SortCol::Size, true, true);
+        assert_eq!(names(&entries, &asc), vec!["alpha", "bravo", "charlie"]);
+
+        // Descending: alphabetical fallback applies before the reverse flip,
+        // so the on-screen order flips to z..a. This is expected and still
+        // readable.
+        let desc = sort_indices(&entries, &filtered, SortCol::Size, false, true);
+        assert_eq!(names(&entries, &desc), vec!["charlie", "bravo", "alpha"]);
+    }
 }

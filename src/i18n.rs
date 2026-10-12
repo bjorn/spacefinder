@@ -141,11 +141,12 @@ fn interpolate(template: &str, args: &[&dyn std::fmt::Display]) -> String {
 ///   - `msgid "..."`
 ///   - `msgid_plural "..."`
 ///   - `msgstr "..."`  or  `msgstr[N] "..."`
+///
 /// Continuation lines (`"..."` on the line below) are concatenated.
 /// Comments (`#...`) and the empty header entry are skipped.
 fn parse_po(src: &str) -> Catalog {
     let mut cat = Catalog::default();
-    let mut lines = src.lines().peekable();
+    let lines = src.lines().peekable();
 
     // Current entry being assembled.
     let mut ctx: Option<String> = None;

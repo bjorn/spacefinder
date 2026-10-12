@@ -306,12 +306,12 @@ mod tests {
         let hidden_off = lay_out(&base, false);
         let names_off: Vec<&str> = hidden_off.iter().map(|c| c.name.as_str()).collect();
         assert!(
-            names_off.iter().any(|n| *n == "visible.txt"),
+            names_off.contains(&"visible.txt"),
             "visible.txt must appear with show_hidden=false, got {:?}",
             names_off
         );
         assert!(
-            !names_off.iter().any(|n| *n == ".hidden.txt"),
+            !names_off.contains(&".hidden.txt"),
             ".hidden.txt must NOT appear with show_hidden=false, got {:?}",
             names_off
         );
@@ -319,7 +319,7 @@ mod tests {
         let hidden_on = lay_out(&base, true);
         let names_on: Vec<&str> = hidden_on.iter().map(|c| c.name.as_str()).collect();
         assert!(
-            names_on.iter().any(|n| *n == ".hidden.txt"),
+            names_on.contains(&".hidden.txt"),
             ".hidden.txt must appear with show_hidden=true, got {:?}",
             names_on
         );
