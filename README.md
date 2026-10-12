@@ -57,15 +57,16 @@ compiled into the binary by `build.rs`.
 ## Installing
 
 Space is published on crates.io as **`spacefinder`** (the name `space` was
-already taken). It currently targets **Linux** only.
+already taken). It runs on Linux, Windows, and macOS.
 
 ```
 cargo install spacefinder
 ```
 
-That installs a `spacefinder` binary. Prebuilt Linux bundles (AppImage and
-`.deb`) are attached to each
-[GitHub release](https://github.com/bjorn/spacefinder/releases).
+That installs a `spacefinder` binary. Prebuilt packages are attached to each
+[GitHub release](https://github.com/bjorn/spacefinder/releases): AppImage
+and `.deb` for Linux, an NSIS installer for Windows, and a signed and
+notarized universal `.dmg` for macOS (Apple Silicon and Intel).
 
 ## Building
 
@@ -99,7 +100,7 @@ moves to trash, F5 refreshes. Ctrl+L focuses the path bar.
 
 ## Status
 
-Prototype, Linux only for now. Usable for browsing and basic cleanup, but
+Prototype. Usable for browsing and basic cleanup, but
 the scope of the project is larger than what ships today. Bug reports and
 suggestions welcome via the
 [issue tracker](https://github.com/bjorn/spacefinder/issues).
